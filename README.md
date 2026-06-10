@@ -53,7 +53,7 @@ python zigzag.py -b cpu photo.jpg                   # force a backend (auto|gpu|
 
 ## Java
 
-One file, no dependencies, multi-threaded. With **Java 11+**, run it directly — no compilation step:
+One file, no dependencies, multi-threaded across all cores. Works on **Java 11+** and runs directly — no compilation step. The same file runs unmodified on every newer JDK, and noticeably faster: **JDK 25 processes ~25% faster than JDK 21** on identical bytecode (measured: 1130 → 845 ms/image on a single core; the JIT auto-vectorizes the pixel loops better) — use the latest JDK you have. It deliberately sticks to stable APIs — no incubator modules (e.g. the Vector API) — so the flag-free launch below always works:
 
 ```sh
 java ZigZag.java photo.jpg                          # binary, size 30, weight 90
