@@ -119,9 +119,11 @@ def upsample2x(src, xp=np):
 
 # ── core pipeline (Algorithm 1 of the paper) ─────────────────────────────────
 
-def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None):
+def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
+            threshold_offset=0):
     """
     rgb: HxWx3 uint8 (RGB). Returns (output_uint8, info_dict).
+    threshold_offset: manual shift of the auto Otsu threshold (0 = auto)
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
@@ -155,7 +157,8 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None)
                        xp.minimum(255.0, channel * 256.0 / xp.maximum(1.0, mean_bg)))
         return out
 
-    info = {'size': size, 'weight': weight, 'otsu': None, 'backend': backend}
+    info = {'size': size, 'weight': weight, 'otsu': None, 'threshold': None,
+            'backend': backend}
 
     def host(a):
         return cp.asnumpy(a) if gpu else a
@@ -166,8 +169,10 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None)
     mh, mw = h * 10 // 100, w * 10 // 100
     region = fg[mh:h - mh, mw:w - mw]
     hist = xp.bincount(xp.clip(region, 0, 255).astype(xp.uint8).ravel(), minlength=256)
-    thr = otsu(cp.asnumpy(hist) if gpu else hist)
-    info['otsu'] = thr
+    auto = otsu(cp.asnumpy(hist) if gpu else hist)
+    thr = min(255, max(0, auto + threshold_offset))
+    info['otsu'] = auto
+    info['threshold'] = thr
 
     if mode in ('gray', 'color'):
         # antialiased background cleanup: threshold the 2x-upsampled foreground,
@@ -204,6 +209,8 @@ def main():
                         help="window size in px, typically 10-100 (default: 30)")
     parser.add_argument("-w", "--weight", type=int, default=90,
                         help="mean weight in percent, typically 50-100 (default: 90)")
+    parser.add_argument("-T", "--threshold-offset", type=int, default=0,
+                        help="manual shift of the auto Otsu threshold (default: 0 = auto)")
     parser.add_argument("-b", "--backend", choices=["auto", "gpu", "cpu"],
                         default="auto", help="processing backend (default: auto)")
     parser.add_argument("-o", "--output",
@@ -260,7 +267,8 @@ def main():
         t0 = time.perf_counter()
         out, info = process(rgb, mode=args.mode, size=args.size,
                             weight=args.weight, upsample=not args.no_upsample,
-                            backend=args.backend)
+                            backend=args.backend,
+                            threshold_offset=args.threshold_offset)
         t_proc = (time.perf_counter() - t0) * 1000
 
         if out_dir:
@@ -278,10 +286,13 @@ def main():
         count += 1
         oh, ow = out.shape[:2]
         rows.append([path, dst, args.mode, info['size'], info['weight'],
-                     info['otsu'] if info['otsu'] is not None else '', info['backend'],
+                     info['otsu'] if info['otsu'] is not None else '',
+                     info['threshold'] if info['threshold'] is not None else '',
+                     info['backend'],
                      rgb.shape[1], rgb.shape[0], ow, oh,
                      round(t_load, 1), round(t_proc, 1), round(t_save, 1)])
-        otsu_s = f"otsu={info['otsu']} · " if info['otsu'] is not None else ""
+        otsu_s = (f"thr={info['threshold']} (otsu={info['otsu']}) · "
+                  if info['threshold'] != info['otsu'] else f"otsu={info['otsu']} · ")
         timing = (f"load {t_load:.0f} · proc {t_proc:.0f} · save {t_save:.0f} ms"
                   if args.time else f"{t_proc:.0f} ms")
         print(f"{path} → {dst}  [size={info['size']} weight={info['weight']} "
@@ -290,7 +301,8 @@ def main():
     if args.csv and rows:
         with open(args.csv, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["input", "output", "mode", "size", "weight", "otsu", "backend",
+            w.writerow(["input", "output", "mode", "size", "weight", "otsu", "threshold",
+                        "backend",
                         "in_width", "in_height", "out_width", "out_height",
                         "load_ms", "proc_ms", "save_ms"])
             w.writerows(rows)

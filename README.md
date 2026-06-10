@@ -23,7 +23,7 @@
 
 ZigZag is a two-pass local mean filter. **Pass A** classifies likely background pixels: a pixel is background when its value reaches the weighted local mean (`weight`, in percent, over a `size`×`size` window). **Pass B** normalizes each pixel against the local mean of background-only pixels, which equalizes non-uniform illumination and makes the foreground histogram cleanly bimodal; a single global Otsu threshold then suffices. See the paper for the details.
 
-Two parameters: `size` (window, default 30 px) and `weight` (mean percentage, default 90 — lower it to ~60 for degraded historical documents).
+Two parameters: `size` (window, default 30 px) and `weight` (mean percentage, default 90 — lower it to ~60 for degraded historical documents). A third, optional knob, `threshold-offset` (default 0), manually shifts the auto Otsu threshold up or down — automatic detection is preserved, the offset just nudges the cut; it is effective in all three modes.
 
 Output modes: `binary` (thresholded, 2× upsampled by default for detail preservation), `gray` (normalized foreground; the background, at or above the Otsu threshold, is cleaned to pure white — the cutoff is thresholded at 2× and averaged back, i.e. antialiased for free), `color` (same antialiased cleanup, with the original colors re-applied to the foreground — luminance-guided, hue-preserving).
 
@@ -41,7 +41,7 @@ python zigzag.py -s 40 -w 60 old_letter.jpg         # historical documents
 python zigzag.py -t *.jpg -o cleaned/               # batch into a directory, with timings
 ```
 
-The result is written next to each input as `<name>_ZZ.png`. Options: `-o` output file — or directory when batching; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, Otsu, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
+The result is written next to each input as `<name>_ZZ.png`. Options: `-o` output file — or directory when batching; `-T` threshold offset; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, thresholds, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
 
 **Optional NVIDIA GPU acceleration** — install CuPy and the GPU backend is auto-detected; the whole pipeline then runs in VRAM (exact integral-image sums, outputs identical to the CPU backend):
 
@@ -62,15 +62,15 @@ java ZigZag.java old_letter.jpg --size=40 --weight=60 --output=clean.png
 java ZigZag.java *.jpg --output=cleaned/ --time     # batch into a directory, with timings
 ```
 
-Options: `--mode=binary|gray|color` · `--size=N` · `--weight=N` · `--output=path|dir` · `--no-upsample` · `--time` (separate load / process / save timings plus a batch summary) · `--csv=path` (per-image metrics as CSV, same columns as the Python CLI). Accepts multiple inputs; `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory.
+Options: `--mode=binary|gray|color` · `--size=N` · `--weight=N` · `--threshold-offset=N` · `--output=path|dir` · `--no-upsample` · `--time` (separate load / process / save timings plus a batch summary) · `--csv=path` (per-image metrics as CSV, same columns as the Python CLI). Accepts multiple inputs; `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory.
 
 ### API
 
 ```java
-ZigZag.Options opts = new ZigZag.Options();   // mode, size, weight, upsample
+ZigZag.Options opts = new ZigZag.Options();   // mode, size, weight, upsample, thresholdOffset
 opts.mode = "binary";
 ZigZag.Result res = ZigZag.process(image, opts);
-// res.image (BufferedImage), res.info (parameters used, Otsu threshold)
+// res.image (BufferedImage), res.info (parameters used, auto Otsu, applied threshold)
 ```
 
 ## JavaScript & web demo
@@ -82,11 +82,13 @@ ZigZag.Result res = ZigZag.process(image, opts);
   import { ZigZag } from './zigzag.js';
 
   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
-  // info: parameters used and Otsu threshold
+  // info: parameters used, auto Otsu and applied threshold
 </script>
 ```
 
-[`zigzag-gpu.js`](zigzag-gpu.js) is an optional WebGPU accelerator running the same pipeline as compute shaders — typically 10-50 ms where the CPU port takes around a second. The foreground is cached on the GPU, so switching the output mode or the 2× upsample is near-instant. WebGPU uses float32 (no f64), so a handful of boundary pixels may differ from the CPU output by ±1 gray level — visually identical:
+Like the Python and Java ports, `thresholdOffset` (default 0) shifts the auto Otsu threshold; `info` reports both the auto and the applied values.
+
+[`zigzag-gpu.js`](zigzag-gpu.js) is an optional WebGPU accelerator running the same pipeline as compute shaders — typically 10-50 ms where the CPU port takes around a second. The foreground is cached on the GPU, so switching the output mode, the 2× upsample or the threshold offset is near-instant. WebGPU uses float32 (no f64), so a handful of boundary pixels may differ from the CPU output by ±1 gray level — visually identical:
 
 ```js
 import { ZigZagGPU } from './zigzag-gpu.js';
@@ -99,7 +101,7 @@ if (ZigZagGPU.isSupported()) {
 }
 ```
 
-[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, adjust the window size and mean weight, swipe the comparison slider against the original (tap to toggle), and save or copy the result — everything runs on-device, on the GPU when WebGPU is available (Chrome, Edge) with transparent CPU fallback otherwise — the status line shows which backend ran. The page is an installable PWA: add it to your home screen and it works fully offline (`manifest.json` + `sw.js`, stale-while-revalidate). It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
+[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, tune **Detail** (analysis window) and **Intensity** (threshold shift), pinch-zoom and pan the full-width preview (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save or copy the result — everything runs on-device, on the GPU when WebGPU is available (Chrome, Edge) with transparent CPU fallback otherwise — the status line shows which backend ran. The page is an installable PWA: add it to your home screen and it works fully offline (`manifest.json` + `sw.js`, stale-while-revalidate). It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
 
 ```sh
 python -m http.server   # then open http://localhost:8000

@@ -35,11 +35,12 @@ public class ZigZag {
         public int size = 30;
         public int weight = 90;
         public boolean upsample = true;
+        public int thresholdOffset = 0;    // manual shift of the auto Otsu threshold
     }
 
-    /** Parameters used and resulting Otsu threshold (binary mode only, else -1). */
+    /** Parameters used, auto Otsu and applied threshold. */
     public static class Info {
-        public int size, weight, otsu = -1;
+        public int size, weight, otsu = -1, threshold = -1;
     }
 
     public static class Result {
@@ -253,9 +254,12 @@ public class ZigZag {
 
         double[] fg = normalize(gray, maskVal, cntBg, w, h, r);
 
-        // Otsu threshold on the foreground histogram (10% margin crop)
-        int thr = otsu(histogram(fg, w, h, 10));
-        info.otsu = thr;
+        // Otsu threshold on the foreground histogram (10% margin crop),
+        // optionally shifted by the manual offset
+        int auto = otsu(histogram(fg, w, h, 10));
+        int thr = Math.min(255, Math.max(0, auto + opts.thresholdOffset));
+        info.otsu = auto;
+        info.threshold = thr;
 
         if (opts.mode.equals("gray")) {
             // antialiased background cleanup: blend toward white with the 2x2
@@ -335,6 +339,7 @@ public class ZigZag {
             if (a.startsWith("--mode=")) opts.mode = a.substring(7);
             else if (a.startsWith("--size=")) opts.size = Integer.parseInt(a.substring(7));
             else if (a.startsWith("--weight=")) opts.weight = Integer.parseInt(a.substring(9));
+            else if (a.startsWith("--threshold-offset=")) opts.thresholdOffset = Integer.parseInt(a.substring(19));
             else if (a.startsWith("--output=")) output = a.substring(9);
             else if (a.equals("--no-upsample")) opts.upsample = false;
             else if (a.equals("--time")) showTime = true;
@@ -345,7 +350,8 @@ public class ZigZag {
             boolean hadPatterns = java.util.Arrays.stream(args).anyMatch(a -> !a.startsWith("--"));
             System.out.println(hadPatterns ? "No input images found."
                     : "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
-                    + "[--mode=binary|gray|color] [--size=N] [--weight=N] [--no-upsample] [--time] [--csv=path]");
+                    + "[--mode=binary|gray|color] [--size=N] [--weight=N] [--threshold-offset=N] "
+                    + "[--no-upsample] [--time] [--csv=path]");
             return;
         }
 
@@ -357,7 +363,7 @@ public class ZigZag {
         }
 
         StringBuilder csv = new StringBuilder(
-                "input,output,mode,size,weight,otsu,backend,in_width,in_height,"
+                "input,output,mode,size,weight,otsu,threshold,backend,in_width,in_height,"
                 + "out_width,out_height,load_ms,proc_ms,save_ms\n");
         double totLoad = 0, totProc = 0, totSave = 0;
         int count = 0;
@@ -397,12 +403,14 @@ public class ZigZag {
             totSave += tSave;
             count++;
             Info f = res.info;
-            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%s,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f%n",
+            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%s,%s,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f%n",
                     csvField(input), csvField(dst.getPath()), opts.mode, f.size, f.weight,
                     f.otsu >= 0 ? String.valueOf(f.otsu) : "",
+                    f.threshold >= 0 ? String.valueOf(f.threshold) : "",
                     img.getWidth(), img.getHeight(),
                     res.image.getWidth(), res.image.getHeight(), tLoad, tProc, tSave));
-            String otsuS = f.otsu >= 0 ? " otsu=" + f.otsu : "";
+            String otsuS = f.threshold != f.otsu ? " thr=" + f.threshold + " (otsu=" + f.otsu + ")"
+                    : f.otsu >= 0 ? " otsu=" + f.otsu : "";
             String timing = showTime
                     ? String.format(Locale.ROOT, "load %.0f | proc %.0f | save %.0f ms", tLoad, tProc, tSave)
                     : String.format(Locale.ROOT, "%.0f ms", tProc);
