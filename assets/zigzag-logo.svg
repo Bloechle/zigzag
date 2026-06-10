@@ -1,0 +1,5 @@
+<svg viewBox="0 0 100 60" xmlns="http://www.w3.org/2000/svg">
+  <!-- ZigZag mark: one zigzag stroke, ends cut mid-slope -->
+  <path d="M4,44 L23,13 L41,47 L59,13 L77,47 L96,16" fill="none"
+        stroke="#296f8b" stroke-width="10" stroke-linejoin="miter" stroke-miterlimit="6"/>
+</svg>

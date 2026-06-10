@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="Clean up document photos: remove shadows and uneven lighting, entirely in your browser. ZigZag — ACM DocEng'24.">
+    <meta property="og:title" content="ZigZag — Document Image Binarizer">
+    <meta property="og:description" content="Remove shadows and uneven lighting from document photos. 100% in-browser, nothing leaves your device.">
+    <meta property="og:image" content="https://bloechle.github.io/zigzag/assets/zigzag-logo.png">
+    <meta property="og:url" content="https://bloechle.github.io/zigzag/">
+    <meta property="og:type" content="website">
+    <meta name="theme-color" content="#0a0a0b">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="assets/icon-192.png">
+    <title>ZigZag — Document Image Binarizer</title>
+    <link rel="icon" href="assets/icon-192.png">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:          #0a0a0b;
+            --bg-elevated: #1c1c1f;
+            --bg-hover:    #252528;
+            --border:      #2a2a2e;
+            --text:        #e4e4e7;
+            --dim:         #a1a1aa;
+            --muted:       #52525b;
+            --accent:      #5cafd6;
+            --accent-dim:  #296f8b;
+            --ok:          #34d399;
+            --radius:      12px;
+            --ease:        cubic-bezier(0.16, 1, 0.3, 1);
+            --safe-t:      env(safe-area-inset-top, 0px);
+            --safe-b:      env(safe-area-inset-bottom, 0px);
+        }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font: 15px/1.5 -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+
+        .hidden { display: none !important; }
+        button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+
+        /* ═══ LANDING ═══ */
+        #landing {
+            position: fixed; inset: 0; z-index: 50;
+            display: flex; align-items: center; justify-content: center;
+            padding: 24px; padding-top: calc(24px + var(--safe-t)); padding-bottom: calc(24px + var(--safe-b));
+            background:
+                radial-gradient(60% 40% at 50% 0%, rgba(92, 175, 214, .08), transparent 70%),
+                var(--bg);
+        }
+        .landing-content { width: 100%; max-width: 340px; text-align: center; }
+        .landing-content img { width: 84px; height: 84px; margin-bottom: 18px; }
+        .landing-content h1 { font-size: 2rem; font-weight: 700; letter-spacing: -.02em; }
+        .landing-sub { color: var(--dim); margin: 2px 0 10px; }
+        .landing-desc { color: var(--muted); font-size: .85rem; line-height: 1.55; margin-bottom: 28px; }
+
+        .landing-buttons { display: grid; gap: 10px; margin-bottom: 18px; }
+        .btn-primary, .btn-secondary {
+            display: flex; align-items: center; justify-content: center; gap: 9px;
+            padding: 15px; border-radius: var(--radius); font-weight: 600; font-size: .95rem;
+            transition: transform .15s var(--ease), background .15s;
+        }
+        .btn-primary { background: var(--accent); color: #06222e; }
+        .btn-secondary { background: var(--bg-elevated); border: 1px solid var(--border); }
+        .btn-primary:active, .btn-secondary:active { transform: scale(.97); }
+
+        .landing-hint { color: var(--muted); font-size: .78rem; }
+        #gpuStatus { margin-top: 8px; font-size: .72rem; color: var(--muted); min-height: 1.2em; }
+        #gpuStatus.on { color: var(--ok); }
+        .landing-credits {
+            margin-top: 30px; font-size: .72rem; color: var(--muted);
+            display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;
+        }
+        .landing-credits a { color: var(--dim); text-decoration: none; border-bottom: 1px solid var(--border); }
+
+        /* ═══ APP ═══ */
+        #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+        #viewport {
+            flex: 1; position: relative; min-height: 0;
+            display: flex; align-items: center; justify-content: center;
+            padding-top: var(--safe-t);
+        }
+
+        /* comparison: result below, original clipped above, draggable line */
+        #compareWrap { position: relative; touch-action: none; }
+        #compareWrap canvas {
+            position: absolute; inset: 0;
+            border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, .55);
+        }
+        #compareClip { position: absolute; inset: 0 auto 0 0; width: 50%; overflow: hidden; }
+        #compareClip canvas { position: absolute; top: 0; left: 0; border-radius: 8px 0 0 8px; }
+        #compareLine {
+            position: absolute; top: 0; bottom: 0; left: 50%; width: 2px;
+            background: var(--accent); transform: translateX(-1px);
+            box-shadow: 0 0 12px rgba(92, 175, 214, .6);
+        }
+        .compare-handle {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 38px; height: 38px; border-radius: 50%;
+            background: var(--accent); color: #06222e;
+            display: flex; align-items: center; justify-content: center;
+        }
+        #compareWrap.toggled #compareLine { display: none; }
+
+        .corner-tag {
+            position: absolute; top: 8px; font-size: .62rem; font-weight: 700; letter-spacing: .08em;
+            padding: 3px 8px; border-radius: 5px; background: rgba(10, 10, 11, .65);
+            backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+            color: var(--dim); pointer-events: none;
+        }
+        #tagOriginal { left: 8px; }
+        #tagResult { right: 8px; }
+
+        #infoBadge {
+            position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+            max-width: calc(100% - 20px); white-space: nowrap; overflow: hidden;
+            font-size: .7rem; color: var(--dim); padding: 5px 12px; border-radius: 20px;
+            background: rgba(28, 28, 31, .75); border: 1px solid var(--border);
+            backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+        }
+
+        #spinner {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            background: rgba(10, 10, 11, .35); backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+        }
+        .spinner-ring {
+            width: 38px; height: 38px; border-radius: 50%;
+            border: 3px solid var(--border); border-top-color: var(--accent);
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ═══ BOTTOM BAR ═══ */
+        .bottom-bar {
+            flex-shrink: 0; padding: 10px 12px calc(10px + var(--safe-b));
+            background: rgba(20, 20, 22, .85); border-top: 1px solid var(--border);
+            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+        }
+        .mode-row {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+            background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+            padding: 4px; margin-bottom: 10px;
+        }
+        .mode-btn {
+            padding: 9px 0; border-radius: 7px; font-size: .82rem; font-weight: 600; color: var(--dim);
+            transition: background .15s, color .15s;
+        }
+        .mode-btn.active { background: var(--accent); color: #06222e; }
+
+        .action-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+        .action-btn {
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+            padding: 8px 0 6px; border-radius: 9px; font-size: .68rem; color: var(--dim);
+            transition: background .15s;
+        }
+        .action-btn:active { background: var(--bg-hover); }
+        .action-btn:disabled { opacity: .35; }
+        .action-btn.accent { color: var(--accent); }
+
+        /* ═══ SETTINGS SHEET ═══ */
+        #sheet { position: fixed; inset: 0; z-index: 60; }
+        .sheet-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); }
+        .sheet-panel {
+            position: absolute; left: 0; right: 0; bottom: 0;
+            background: var(--bg-elevated); border-radius: 18px 18px 0 0;
+            border-top: 1px solid var(--border);
+            padding: 8px 20px calc(22px + var(--safe-b));
+            transform: translateY(0); transition: transform .3s var(--ease);
+        }
+        #sheet.hidden-anim .sheet-panel { transform: translateY(100%); }
+        .sheet-drag-bar { width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 4px auto 14px; }
+        .sheet-title { font-weight: 600; font-size: .95rem; display: block; margin-bottom: 16px; }
+        .param-row { display: grid; grid-template-columns: 64px 1fr 38px; align-items: center; gap: 12px; margin-bottom: 14px; }
+        .param-row label { font-size: .8rem; color: var(--dim); }
+        .param-val { font-size: .8rem; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+
+        input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: var(--border); outline: none; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none; width: 22px; height: 22px; border-radius: 50%;
+            background: var(--accent); border: none; cursor: pointer;
+        }
+        input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: none; }
+        .sheet-note { font-size: .72rem; color: var(--muted); }
+
+        /* ═══ DROP OVERLAY (desktop) ═══ */
+        #dropOverlay {
+            position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center;
+            background: rgba(10, 10, 11, .85); border: 2px dashed var(--accent); border-radius: 16px;
+        }
+        .drop-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--accent); font-weight: 600; }
+    </style>
+</head>
+<body>
+
+<!-- ═══ LANDING ═══ -->
+<div id="landing">
+    <div class="landing-content">
+        <img src="assets/zigzag-logo.png" alt="ZigZag">
+        <h1>ZigZag</h1>
+        <p class="landing-sub">Clean up document photos</p>
+        <p class="landing-desc">Remove shadows and uneven lighting instantly. 100% private — nothing leaves your device.</p>
+        <div class="landing-buttons">
+            <button id="btnCamera" class="btn-primary">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Take a photo
+            </button>
+            <button id="btnGallery" class="btn-secondary">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                Choose an image
+            </button>
+        </div>
+        <p class="landing-hint">or drop / paste an image</p>
+        <div id="gpuStatus"></div>
+        <div class="landing-credits">
+            <a href="https://github.com/Bloechle/ZigZag" target="_blank" rel="noopener">GitHub</a>
+            <span>·</span>
+            <a href="https://doi.org/10.1145/3685650.3685661" target="_blank" rel="noopener">DocEng'24 paper</a>
+            <span>·</span>
+            <span>Bloechle, Hennebert &amp; Gisler</span>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ APP ═══ -->
+<div id="app" class="hidden">
+    <div id="viewport">
+        <div id="compareWrap">
+            <canvas id="canvasResult"></canvas>
+            <div id="compareClip"><canvas id="canvasOriginal"></canvas></div>
+            <span id="tagOriginal" class="corner-tag">ORIGINAL</span>
+            <span id="tagResult" class="corner-tag">ZIGZAG</span>
+            <div id="compareLine">
+                <div class="compare-handle">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 6 4 12 9 18"/><polyline points="15 6 20 12 15 18"/></svg>
+                </div>
+            </div>
+        </div>
+        <div id="infoBadge"></div>
+        <div id="spinner" class="hidden"><div class="spinner-ring"></div></div>
+    </div>
+
+    <div class="bottom-bar">
+        <div class="mode-row" id="modeRow">
+            <button class="mode-btn active" data-mode="binary">B&amp;W</button>
+            <button class="mode-btn" data-mode="gray">Gray</button>
+            <button class="mode-btn" data-mode="color">Color</button>
+        </div>
+        <div class="action-row">
+            <button id="btnNew" class="action-btn">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                <span>New</span>
+            </button>
+            <button id="btnTune" class="action-btn">
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                <span>Tune</span>
+            </button>
+            <button id="btnCopy" class="action-btn" disabled>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span>Copy</span>
+            </button>
+            <button id="btnSave" class="action-btn accent" disabled>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <span>Save</span>
+            </button>
+        </div>
+    </div>
+
+    <div id="sheet" class="hidden hidden-anim">
+        <div class="sheet-backdrop" id="sheetBackdrop"></div>
+        <div class="sheet-panel">
+            <div class="sheet-drag-bar"></div>
+            <span class="sheet-title">Settings</span>
+            <div class="param-row">
+                <label for="slSize">Window</label>
+                <input type="range" id="slSize" min="10" max="100" value="30" step="5">
+                <span id="valSize" class="param-val">30</span>
+            </div>
+            <div class="param-row">
+                <label for="slWeight">Weight</label>
+                <input type="range" id="slWeight" min="50" max="100" value="90" step="5">
+                <span id="valWeight" class="param-val">90</span>
+            </div>
+            <p class="sheet-note">Defaults 30 / 90 · try weight ≈ 60 for old, degraded documents.</p>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ DROP OVERLAY ═══ -->
+<div id="dropOverlay" class="hidden">
+    <div class="drop-inner">
+        <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <span>Drop image to process</span>
+    </div>
+</div>
+
+<input type="file" id="fileCamera" accept="image/*" capture="environment" hidden>
+<input type="file" id="fileGallery" accept="image/*" hidden>
+
+<script type="module">
+    import { ZigZag } from './zigzag.js';
+    import { ZigZagGPU } from './zigzag-gpu.js';
+
+    // PWA: offline cache + installability (no-op on file:// or unsupported)
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+        addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+
+    const $ = id => document.getElementById(id);
+    const el = {};
+    ['landing', 'app', 'viewport', 'compareWrap', 'compareClip', 'compareLine',
+     'canvasOriginal', 'canvasResult', 'infoBadge', 'spinner', 'gpuStatus',
+     'btnCamera', 'btnGallery', 'btnNew', 'btnTune', 'btnCopy', 'btnSave',
+     'modeRow', 'sheet', 'sheetBackdrop', 'slSize', 'slWeight', 'valSize', 'valWeight',
+     'dropOverlay', 'fileCamera', 'fileGallery'].forEach(id => el[id] = $(id));
+
+    const MAX_PIXELS = 12_000_000;   // keep CPU processing interactive
+    let gpu = null;                  // WebGPU accelerator, null => CPU
+    let srcImage = null;             // ImageData of the (possibly downscaled) source
+    let srcName = 'document';
+    let origSize = null;             // [w, h] before downscale, or null
+    let mode = 'binary';
+    let busy = false, pending = false, debounceId = 0;
+    let comparePos = 0.5, toggled = false;
+
+    // ── GPU init (transparent CPU fallback on any failure) ──
+    if (ZigZagGPU.isSupported()) {
+        try {
+            const g = new ZigZagGPU();
+            await g.init();
+            gpu = g;
+        } catch { gpu = null; }
+    }
+    el.gpuStatus.textContent = gpu ? '⚡ WebGPU acceleration active' : 'Running on CPU';
+    el.gpuStatus.classList.toggle('on', !!gpu);
+
+    // ── image loading ──
+    async function loadBlob(blob, name) {
+        srcName = (name || 'document').replace(/\.[^/.]+$/, '');
+        const bmp = await createImageBitmap(blob);
+        let w = bmp.width, h = bmp.height;
+        origSize = (w * h > MAX_PIXELS) ? [w, h] : null;
+        if (origSize) {
+            const s = Math.sqrt(MAX_PIXELS / (w * h));
+            w = Math.round(w * s);
+            h = Math.round(h * s);
+        }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(bmp, 0, 0, w, h);
+        bmp.close();
+        srcImage = ctx.getImageData(0, 0, w, h);
+        if (gpu) {
+            try { await gpu.uploadImage(srcImage); } catch { gpu = null; }
+        }
+
+        el.canvasOriginal.width = w;
+        el.canvasOriginal.height = h;
+        el.canvasOriginal.getContext('2d').putImageData(srcImage, 0, 0);
+
+        el.landing.classList.add('hidden');
+        el.app.classList.remove('hidden');
+        fitCanvases();
+        run();
+    }
+
+    function loadFile(file) {
+        if (file && file.type.startsWith('image/')) loadBlob(file, file.name);
+    }
+
+    // ── processing (GPU first, CPU fallback) ──
+    async function run() {
+        if (!srcImage) return;
+        if (busy) { pending = true; return; }
+        busy = true;
+        el.spinner.classList.remove('hidden');
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+        const opts = {
+            mode,
+            size: parseInt(el.slSize.value, 10),
+            weight: parseInt(el.slWeight.value, 10),
+        };
+        const t0 = performance.now();
+        let res = null, backend = 'cpu';
+        if (gpu) {
+            try {
+                res = await gpu.process(opts);
+                backend = 'gpu';
+            } catch { gpu = null; }
+        }
+        if (!res) res = ZigZag.process(srcImage, opts);
+        const ms = performance.now() - t0;
+
+        el.canvasResult.width = res.width;
+        el.canvasResult.height = res.height;
+        el.canvasResult.getContext('2d')
+            .putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
+
+        const i = res.info;
+        const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
+        const up = res.width !== srcImage.width ? ` → ${res.width}×${res.height}` : '';
+        const ot = i.otsu !== null ? ` · otsu ${i.otsu}` : '';
+        el.infoBadge.textContent =
+            `${srcImage.width}×${srcImage.height}${ds}${up} · size ${i.size} · weight ${i.weight}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+
+        el.btnSave.disabled = false;
+        el.btnCopy.disabled = !window.ClipboardItem;
+        el.spinner.classList.add('hidden');
+        busy = false;
+        if (pending) { pending = false; run(); }
+    }
+
+    // ── viewport fit + comparison slider ──
+    function fitCanvases() {
+        if (!srcImage) return;
+        const pad = 14;
+        const vw = el.viewport.clientWidth - pad, vh = el.viewport.clientHeight - pad;
+        const s = Math.min(vw / srcImage.width, vh / srcImage.height, 1);
+        const w = Math.round(srcImage.width * s), h = Math.round(srcImage.height * s);
+        el.compareWrap.style.width = w + 'px';
+        el.compareWrap.style.height = h + 'px';
+        for (const c of [el.canvasOriginal, el.canvasResult]) {
+            c.style.width = w + 'px';
+            c.style.height = h + 'px';
+        }
+        applyCompare();
+    }
+
+    function applyCompare() {
+        const pct = (toggled ? 1 : comparePos) * 100;
+        el.compareClip.style.width = pct + '%';
+        el.compareLine.style.left = pct + '%';
+        el.compareWrap.classList.toggle('toggled', toggled);
+    }
+
+    let dragX = 0, dragT = 0, moved = false;
+    el.compareWrap.addEventListener('pointerdown', e => {
+        if (!srcImage) return;
+        el.compareWrap.setPointerCapture(e.pointerId);
+        dragX = e.clientX; dragT = Date.now(); moved = false;
+    });
+    el.compareWrap.addEventListener('pointermove', e => {
+        if (!el.compareWrap.hasPointerCapture?.(e.pointerId)) return;
+        if (Math.abs(e.clientX - dragX) > 6) moved = true;
+        if (!moved) return;
+        const r = el.compareWrap.getBoundingClientRect();
+        comparePos = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / r.width));
+        toggled = false;
+        applyCompare();
+    });
+    el.compareWrap.addEventListener('pointerup', e => {
+        if (!moved && Date.now() - dragT < 300) {   // tap: toggle full original
+            toggled = !toggled;
+            applyCompare();
+        }
+    });
+    if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(fitCanvases).observe(el.viewport);
+    }
+
+    // ── bindings ──
+    el.btnCamera.addEventListener('click', () => el.fileCamera.click());
+    el.btnGallery.addEventListener('click', () => el.fileGallery.click());
+    for (const input of [el.fileCamera, el.fileGallery]) {
+        input.addEventListener('change', () => { loadFile(input.files[0]); input.value = ''; });
+    }
+
+    el.modeRow.addEventListener('click', e => {
+        const btn = e.target.closest('.mode-btn');
+        if (!btn || btn.dataset.mode === mode) return;
+        mode = btn.dataset.mode;
+        el.modeRow.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+        run();
+    });
+
+    [['slSize', 'valSize'], ['slWeight', 'valWeight']].forEach(([s, v]) => {
+        el[s].addEventListener('input', () => {
+            el[v].textContent = el[s].value;
+            clearTimeout(debounceId);
+            debounceId = setTimeout(run, 150);
+        });
+    });
+
+    function showSheet(on) {
+        if (on) {
+            el.sheet.classList.remove('hidden');
+            requestAnimationFrame(() => el.sheet.classList.remove('hidden-anim'));
+        } else {
+            el.sheet.classList.add('hidden-anim');
+            setTimeout(() => el.sheet.classList.add('hidden'), 300);
+        }
+    }
+    el.btnTune.addEventListener('click', () => showSheet(true));
+    el.sheetBackdrop.addEventListener('click', () => showSheet(false));
+
+    el.btnNew.addEventListener('click', () => {
+        srcImage = null;
+        el.btnSave.disabled = true;
+        el.btnCopy.disabled = true;
+        el.app.classList.add('hidden');
+        el.landing.classList.remove('hidden');
+    });
+
+    el.btnSave.addEventListener('click', () => {
+        el.canvasResult.toBlob(blob => {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `${srcName}_ZZ.png`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }, 'image/png');
+    });
+
+    el.btnCopy.addEventListener('click', () => {
+        el.canvasResult.toBlob(blob => {
+            navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).catch(() => {});
+        }, 'image/png');
+    });
+
+    // ── paste + drag-and-drop ──
+    document.addEventListener('paste', e => {
+        const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+        if (item) loadFile(item.getAsFile());
+    });
+    let dragDepth = 0;
+    document.addEventListener('dragenter', e => {
+        e.preventDefault();
+        if (++dragDepth === 1) el.dropOverlay.classList.remove('hidden');
+    });
+    document.addEventListener('dragleave', () => {
+        if (--dragDepth === 0) el.dropOverlay.classList.add('hidden');
+    });
+    document.addEventListener('dragover', e => e.preventDefault());
+    document.addEventListener('drop', e => {
+        e.preventDefault();
+        dragDepth = 0;
+        el.dropOverlay.classList.add('hidden');
+        loadFile(e.dataTransfer?.files?.[0]);
+    });
+</script>
+</body>
+</html>
