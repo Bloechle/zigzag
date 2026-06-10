@@ -173,7 +173,8 @@ class ZigZag {
 
     /**
      * imageData: { data: RGBA bytes, width, height }
-     * opts: { mode: 'binary'|'gray'|'color', size, weight, upsample }
+     * opts: { mode: 'binary'|'gray'|'color', size, weight, upsample,
+     *         thresholdOffset }  — offset shifts the auto Otsu threshold (0 = auto)
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {
@@ -183,6 +184,7 @@ class ZigZag {
         const size = opts.size ?? 30;
         const weight = opts.weight ?? 90;
         const upsample = opts.upsample ?? true;
+        const offset = opts.thresholdOffset ?? 0;   // manual shift of the auto threshold
 
         const r = Math.floor(size / 2);
         const wf = weight / 100;
@@ -221,13 +223,16 @@ class ZigZag {
             return fg;
         };
 
-        const info = { size, weight, otsu: null };
+        const info = { size, weight, otsu: null, threshold: null };
 
         const fg = normalize(gray, maskVal);
 
-        // Otsu threshold on the foreground histogram (10% margin crop)
-        const thr = ZigZag.otsu(ZigZag.histogram(fg, w, h, 10));
-        info.otsu = thr;
+        // Otsu threshold on the foreground histogram (10% margin crop),
+        // optionally shifted by the manual offset
+        const otsu = ZigZag.otsu(ZigZag.histogram(fg, w, h, 10));
+        const thr = Math.min(255, Math.max(0, otsu + offset));
+        info.otsu = otsu;
+        info.threshold = thr;
 
         if (mode === 'gray' || mode === 'color') {
             // antialiased background cleanup: blend toward white with the 2x2

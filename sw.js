@@ -2,7 +2,7 @@
 // Strategy: stale-while-revalidate (instant load, background refresh).
 // Bump CACHE on every deploy to force a full refresh.
 
-const CACHE = 'zigzag-v1';
+const CACHE = 'zigzag-v2';
 const SHELL = [
     './',
     'index.html',

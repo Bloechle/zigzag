@@ -360,6 +360,7 @@ export class ZigZagGPU {
         const size = opts.size ?? 30;
         const weight = opts.weight ?? 90;
         const upsample = opts.upsample ?? true;
+        const offset = opts.thresholdOffset ?? 0;   // manual shift of the auto threshold
 
         const w = this.#imgWidth, h = this.#imgHeight;
         const B = this.#bufs;
@@ -369,8 +370,8 @@ export class ZigZagGPU {
             await this.#computeForeground(w, h, size, weight);
             this.#fgKey = key;
         }
-        const thr = this.#otsu;
-        const info = { size, weight, otsu: thr };
+        const thr = Math.min(255, Math.max(0, this.#otsu + offset));
+        const info = { size, weight, otsu: this.#otsu, threshold: thr };
 
         // ─── output stage ───
         const is2x = mode === 'binary' && upsample;

@@ -4,6 +4,6 @@
   <circle cx="256" cy="256" r="176" fill="#ffffff"/>
   <g transform="translate(256 256) scale(2.5) translate(-50 -30)">
     <path d="M4,44 L23,13 L41,47 L59,13 L77,47 L96,16" fill="none"
-          stroke="#296f8b" stroke-width="10" stroke-linejoin="miter" stroke-miterlimit="6"/>
+          stroke="#005393" stroke-width="10" stroke-linejoin="miter" stroke-miterlimit="6"/>
   </g>
 </svg>

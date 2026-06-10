@@ -28,8 +28,8 @@
             --text:        #e4e4e7;
             --dim:         #a1a1aa;
             --muted:       #52525b;
-            --accent:      #5cafd6;
-            --accent-dim:  #296f8b;
+            --accent:      #005393;   /* corporate blue — fills */
+            --accent-soft: #4da3dd;   /* readable tint of it on dark — text & glows */
             --ok:          #34d399;
             --radius:      12px;
             --ease:        cubic-bezier(0.16, 1, 0.3, 1);
@@ -58,7 +58,7 @@
             display: flex; align-items: center; justify-content: center;
             padding: 24px; padding-top: calc(24px + var(--safe-t)); padding-bottom: calc(24px + var(--safe-b));
             background:
-                radial-gradient(60% 40% at 50% 0%, rgba(92, 175, 214, .08), transparent 70%),
+                radial-gradient(60% 40% at 50% 0%, rgba(77, 163, 221, .08), transparent 70%),
                 var(--bg);
         }
         .landing-content { width: 100%; max-width: 340px; text-align: center; }
@@ -73,7 +73,7 @@
             padding: 15px; border-radius: var(--radius); font-weight: 600; font-size: .95rem;
             transition: transform .15s var(--ease), background .15s;
         }
-        .btn-primary { background: var(--accent); color: #06222e; }
+        .btn-primary { background: var(--accent); color: #fff; }
         .btn-secondary { background: var(--bg-elevated); border: 1px solid var(--border); }
         .btn-primary:active, .btn-secondary:active { transform: scale(.97); }
 
@@ -89,14 +89,14 @@
         /* ═══ APP ═══ */
         #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
 
-        #viewport {
-            flex: 1; position: relative; min-height: 0;
-            display: flex; align-items: center; justify-content: center;
-            padding-top: var(--safe-t);
-        }
+        #viewport { flex: 1; position: relative; min-height: 0; overflow: hidden; }
 
         /* comparison: result below, original clipped above, draggable line */
-        #compareWrap { position: relative; touch-action: none; }
+        #compareWrap {
+            position: absolute; top: 0; left: 0;
+            transform-origin: 0 0; touch-action: none;
+            --invz: 1;   /* 1/zoom — keeps overlays at constant screen size */
+        }
         #compareWrap canvas {
             position: absolute; inset: 0;
             border-radius: 8px; box-shadow: 0 8px 40px rgba(0, 0, 0, .55);
@@ -104,14 +104,14 @@
         #compareClip { position: absolute; inset: 0 auto 0 0; width: 50%; overflow: hidden; }
         #compareClip canvas { position: absolute; top: 0; left: 0; border-radius: 8px 0 0 8px; }
         #compareLine {
-            position: absolute; top: 0; bottom: 0; left: 50%; width: 2px;
-            background: var(--accent); transform: translateX(-1px);
-            box-shadow: 0 0 12px rgba(92, 175, 214, .6);
+            position: absolute; top: 0; bottom: 0; left: 50%; width: calc(2px * var(--invz));
+            background: var(--accent); transform: translateX(-50%);
+            box-shadow: 0 0 12px rgba(77, 163, 221, .55);
         }
         .compare-handle {
-            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(var(--invz));
             width: 38px; height: 38px; border-radius: 50%;
-            background: var(--accent); color: #06222e;
+            background: var(--accent); color: #fff;
             display: flex; align-items: center; justify-content: center;
         }
         #compareWrap.toggled #compareLine { display: none; }
@@ -121,9 +121,10 @@
             padding: 3px 8px; border-radius: 5px; background: rgba(10, 10, 11, .65);
             backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
             color: var(--dim); pointer-events: none;
+            transform: scale(var(--invz));
         }
-        #tagOriginal { left: 8px; }
-        #tagResult { right: 8px; }
+        #tagOriginal { left: 8px; transform-origin: top left; }
+        #tagResult { right: 8px; transform-origin: top right; }
 
         #infoBadge {
             position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
@@ -139,7 +140,7 @@
         }
         .spinner-ring {
             width: 38px; height: 38px; border-radius: 50%;
-            border: 3px solid var(--border); border-top-color: var(--accent);
+            border: 3px solid var(--border); border-top-color: var(--accent-soft);
             animation: spin .8s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -159,7 +160,7 @@
             padding: 9px 0; border-radius: 7px; font-size: .82rem; font-weight: 600; color: var(--dim);
             transition: background .15s, color .15s;
         }
-        .mode-btn.active { background: var(--accent); color: #06222e; }
+        .mode-btn.active { background: var(--accent); color: #fff; }
 
         .action-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
         .action-btn {
@@ -169,11 +170,11 @@
         }
         .action-btn:active { background: var(--bg-hover); }
         .action-btn:disabled { opacity: .35; }
-        .action-btn.accent { color: var(--accent); }
+        .action-btn.accent { color: var(--accent-soft); }
 
         /* ═══ SETTINGS SHEET ═══ */
         #sheet { position: fixed; inset: 0; z-index: 60; }
-        .sheet-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); }
+        .sheet-backdrop { position: absolute; inset: 0; }   /* click-to-close, no dimming: live preview stays visible */
         .sheet-panel {
             position: absolute; left: 0; right: 0; bottom: 0;
             background: var(--bg-elevated); border-radius: 18px 18px 0 0;
@@ -183,7 +184,9 @@
         }
         #sheet.hidden-anim .sheet-panel { transform: translateY(100%); }
         .sheet-drag-bar { width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 4px auto 14px; }
-        .sheet-title { font-weight: 600; font-size: .95rem; display: block; margin-bottom: 16px; }
+        .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .sheet-title { font-weight: 600; font-size: .95rem; }
+        .sheet-reset { font-size: .8rem; font-weight: 600; color: var(--accent-soft); padding: 4px 8px; }
         .param-row { display: grid; grid-template-columns: 64px 1fr 38px; align-items: center; gap: 12px; margin-bottom: 14px; }
         .param-row label { font-size: .8rem; color: var(--dim); }
         .param-val { font-size: .8rem; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
@@ -194,14 +197,13 @@
             background: var(--accent); border: none; cursor: pointer;
         }
         input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: none; }
-        .sheet-note { font-size: .72rem; color: var(--muted); }
 
         /* ═══ DROP OVERLAY (desktop) ═══ */
         #dropOverlay {
             position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center;
-            background: rgba(10, 10, 11, .85); border: 2px dashed var(--accent); border-radius: 16px;
+            background: rgba(10, 10, 11, .85); border: 2px dashed var(--accent-soft); border-radius: 16px;
         }
-        .drop-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--accent); font-weight: 600; }
+        .drop-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--accent-soft); font-weight: 600; }
     </style>
 </head>
 <body>
@@ -283,18 +285,20 @@
         <div class="sheet-backdrop" id="sheetBackdrop"></div>
         <div class="sheet-panel">
             <div class="sheet-drag-bar"></div>
-            <span class="sheet-title">Settings</span>
+            <div class="sheet-head">
+                <span class="sheet-title">Settings</span>
+                <button id="btnReset" class="sheet-reset">Reset</button>
+            </div>
             <div class="param-row">
-                <label for="slSize">Window</label>
+                <label for="slSize">Detail</label>
                 <input type="range" id="slSize" min="10" max="100" value="30" step="5">
                 <span id="valSize" class="param-val">30</span>
             </div>
             <div class="param-row">
-                <label for="slWeight">Weight</label>
-                <input type="range" id="slWeight" min="50" max="100" value="90" step="5">
-                <span id="valWeight" class="param-val">90</span>
+                <label for="slThr">Intensity</label>
+                <input type="range" id="slThr" min="-100" max="100" value="0" step="1">
+                <span id="valThr" class="param-val">0</span>
             </div>
-            <p class="sheet-note">Defaults 30 / 90 · try weight ≈ 60 for old, degraded documents.</p>
         </div>
     </div>
 </div>
@@ -324,7 +328,7 @@
     ['landing', 'app', 'viewport', 'compareWrap', 'compareClip', 'compareLine',
      'canvasOriginal', 'canvasResult', 'infoBadge', 'spinner', 'gpuStatus',
      'btnCamera', 'btnGallery', 'btnNew', 'btnTune', 'btnCopy', 'btnSave',
-     'modeRow', 'sheet', 'sheetBackdrop', 'slSize', 'slWeight', 'valSize', 'valWeight',
+     'modeRow', 'sheet', 'sheetBackdrop', 'btnReset', 'slSize', 'slThr', 'valSize', 'valThr',
      'dropOverlay', 'fileCamera', 'fileGallery'].forEach(id => el[id] = $(id));
 
     const MAX_PIXELS = 12_000_000;   // keep CPU processing interactive
@@ -393,7 +397,7 @@
         const opts = {
             mode,
             size: parseInt(el.slSize.value, 10),
-            weight: parseInt(el.slWeight.value, 10),
+            thresholdOffset: parseInt(el.slThr.value, 10),
         };
         const t0 = performance.now();
         let res = null, backend = 'cpu';
@@ -414,9 +418,9 @@
         const i = res.info;
         const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
         const up = res.width !== srcImage.width ? ` → ${res.width}×${res.height}` : '';
-        const ot = i.otsu !== null ? ` · otsu ${i.otsu}` : '';
+        const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
         el.infoBadge.textContent =
-            `${srcImage.width}×${srcImage.height}${ds}${up} · size ${i.size} · weight ${i.weight}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+            `${srcImage.width}×${srcImage.height}${ds}${up} · size ${i.size}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
 
         el.btnSave.disabled = false;
         el.btnCopy.disabled = !window.ClipboardItem;
@@ -425,20 +429,43 @@
         if (pending) { pending = false; run(); }
     }
 
-    // ── viewport fit + comparison slider ──
+    // ── viewport: full-width fit + pinch zoom & pan ──
+    const view = { w0: 0, h0: 0, z: 1, zMin: 1, tx: 0, ty: 0 };
+
     function fitCanvases() {
         if (!srcImage) return;
-        const pad = 14;
-        const vw = el.viewport.clientWidth - pad, vh = el.viewport.clientHeight - pad;
-        const s = Math.min(vw / srcImage.width, vh / srcImage.height, 1);
-        const w = Math.round(srcImage.width * s), h = Math.round(srcImage.height * s);
-        el.compareWrap.style.width = w + 'px';
-        el.compareWrap.style.height = h + 'px';
+        view.w0 = el.viewport.clientWidth;
+        view.h0 = view.w0 * srcImage.height / srcImage.width;
+        view.zMin = Math.min(1, el.viewport.clientHeight / view.h0);  // pinch out to whole page
+        view.z = 1;                                                   // default: full width
+        view.tx = 0;
+        view.ty = 0;                                                  // tall documents start at the top
+        el.compareWrap.style.width = view.w0 + 'px';
+        el.compareWrap.style.height = view.h0 + 'px';
         for (const c of [el.canvasOriginal, el.canvasResult]) {
-            c.style.width = w + 'px';
-            c.style.height = h + 'px';
+            c.style.width = view.w0 + 'px';   // px, not %: the original's containing
+            c.style.height = view.h0 + 'px';  // block is #compareClip, which the slider resizes
         }
+        applyView();
         applyCompare();
+    }
+
+    function applyView() {
+        const vw = el.viewport.clientWidth, vh = el.viewport.clientHeight;
+        const sw = view.w0 * view.z, sh = view.h0 * view.z;
+        view.tx = sw <= vw ? (vw - sw) / 2 : Math.max(vw - sw, Math.min(0, view.tx));
+        view.ty = sh <= vh ? (vh - sh) / 2 : Math.max(vh - sh, Math.min(0, view.ty));
+        el.compareWrap.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.z})`;
+        el.compareWrap.style.setProperty('--invz', 1 / view.z);
+    }
+
+    function zoomAt(f, cx, cy) {            // cx/cy in viewport coordinates
+        const z = Math.max(view.zMin, Math.min(8, view.z * f));
+        f = z / view.z;
+        view.tx = cx - (cx - view.tx) * f;
+        view.ty = cy - (cy - view.ty) * f;
+        view.z = z;
+        applyView();
     }
 
     function applyCompare() {
@@ -448,27 +475,91 @@
         el.compareWrap.classList.toggle('toggled', toggled);
     }
 
-    let dragX = 0, dragT = 0, moved = false;
+    // one finger: horizontal drag = slider, vertical drag = pan, tap = toggle original,
+    // double-tap / double-click = reset view · two fingers: pinch zoom & pan · wheel: zoom
+    const pointers = new Map();
+    let gesture = null, moved = false, downT = 0, lastTap = 0;
+    let pinchDist = 0, pinchX = 0, pinchY = 0;
+
+    const vpXY = (x, y) => {
+        const r = el.viewport.getBoundingClientRect();
+        return [x - r.left, y - r.top];
+    };
+    const pinchState = () => {
+        const [a, b] = [...pointers.values()];
+        return [Math.hypot(a.x - b.x, a.y - b.y), ...vpXY((a.x + b.x) / 2, (a.y + b.y) / 2)];
+    };
+
     el.compareWrap.addEventListener('pointerdown', e => {
         if (!srcImage) return;
         el.compareWrap.setPointerCapture(e.pointerId);
-        dragX = e.clientX; dragT = Date.now(); moved = false;
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+        if (pointers.size === 2) {
+            gesture = 'pinch';
+            moved = true;
+            [pinchDist, pinchX, pinchY] = pinchState();
+        } else {
+            gesture = e.target.closest('#compareLine') ? 'slider' : null;
+            moved = false;
+            downT = Date.now();
+        }
     });
+
     el.compareWrap.addEventListener('pointermove', e => {
-        if (!el.compareWrap.hasPointerCapture?.(e.pointerId)) return;
-        if (Math.abs(e.clientX - dragX) > 6) moved = true;
+        const p = pointers.get(e.pointerId);
+        if (!p) return;
+        const dx = e.clientX - p.x, dy = e.clientY - p.y;
+        p.x = e.clientX; p.y = e.clientY;
+        if (!moved && Math.hypot(p.x - p.x0, p.y - p.y0) > 6) {
+            moved = true;
+            gesture ??= view.z > 1 ? 'pan'   // zoomed in: drag pans, slider via its handle
+                : Math.abs(p.x - p.x0) >= Math.abs(p.y - p.y0) ? 'slider' : 'pan';
+        }
         if (!moved) return;
-        const r = el.compareWrap.getBoundingClientRect();
-        comparePos = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / r.width));
-        toggled = false;
-        applyCompare();
-    });
-    el.compareWrap.addEventListener('pointerup', e => {
-        if (!moved && Date.now() - dragT < 300) {   // tap: toggle full original
-            toggled = !toggled;
+        if (gesture === 'pinch') {
+            const [d, cx, cy] = pinchState();
+            view.tx += cx - pinchX;
+            view.ty += cy - pinchY;
+            zoomAt(d / pinchDist, cx, cy);
+            [pinchDist, pinchX, pinchY] = [d, cx, cy];
+        } else if (gesture === 'pan') {
+            view.tx += dx;
+            view.ty += dy;
+            applyView();
+        } else if (gesture === 'slider') {
+            const r = el.compareWrap.getBoundingClientRect();
+            comparePos = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / r.width));
+            toggled = false;
             applyCompare();
         }
     });
+
+    const endPointer = e => {
+        if (!pointers.delete(e.pointerId)) return;
+        if (gesture === 'pinch') {
+            const p = pointers.values().next().value;   // pinch → remaining finger pans
+            if (p) { p.x0 = p.x; p.y0 = p.y; }
+            gesture = 'pan';
+        } else if (!moved && e.type === 'pointerup' && Date.now() - downT < 300) {
+            const now = Date.now();
+            toggled = !toggled;                          // tap: toggle full original
+            if (now - lastTap < 300) { toggled = !toggled; fitCanvases(); }  // double-tap: reset
+            lastTap = now;
+            applyCompare();
+        }
+        if (!pointers.size) gesture = null;
+    };
+    el.compareWrap.addEventListener('pointerup', endPointer);
+    el.compareWrap.addEventListener('pointercancel', endPointer);
+
+    el.viewport.addEventListener('wheel', e => {
+        if (!srcImage) return;
+        e.preventDefault();
+        zoomAt(Math.exp(-e.deltaY * 0.002), ...vpXY(e.clientX, e.clientY));
+    }, { passive: false });
+
+    el.viewport.addEventListener('dblclick', fitCanvases);
+
     if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(fitCanvases).observe(el.viewport);
     }
@@ -488,9 +579,10 @@
         run();
     });
 
-    [['slSize', 'valSize'], ['slWeight', 'valWeight']].forEach(([s, v]) => {
+    [['slSize', 'valSize'], ['slThr', 'valThr']].forEach(([s, v]) => {
         el[s].addEventListener('input', () => {
-            el[v].textContent = el[s].value;
+            const n = parseInt(el[s].value, 10);
+            el[v].textContent = s === 'slThr' && n > 0 ? '+' + n : String(n);
             clearTimeout(debounceId);
             debounceId = setTimeout(run, 150);
         });
@@ -506,6 +598,17 @@
         }
     }
     el.btnTune.addEventListener('click', () => showSheet(true));
+    el.btnReset.addEventListener('click', () => {
+        let changed = false;
+        for (const [s, v] of [['slSize', 'valSize'], ['slThr', 'valThr']]) {
+            if (el[s].value !== el[s].defaultValue) {
+                el[s].value = el[s].defaultValue;   // defaults live in the HTML value attrs
+                el[v].textContent = el[s].value;
+                changed = true;
+            }
+        }
+        if (changed) run();
+    });
     el.sheetBackdrop.addEventListener('click', () => showSheet(false));
 
     el.btnNew.addEventListener('click', () => {

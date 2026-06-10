@@ -26,6 +26,9 @@ bin/
 /nbdist/
 /.nb-gradle/
 
+# AI bundles / scratch
+_ai-*
+
 ### VS Code ###
 .vscode/
 
