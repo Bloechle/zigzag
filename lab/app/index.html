@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self';
+                   script-src 'self' https://cdn.jsdelivr.net;
+                   style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+                   img-src 'self' data: blob: https://cdn.jsdelivr.net;
+                   font-src 'self' data: https://cdn.jsdelivr.net;
+                   connect-src 'self' data: blob: https://cdn.jsdelivr.net;
+                   worker-src 'self' blob:">
+    <title>ZQS Lab</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
+
+    <!-- Shoelace (widgets) — both themes so dark mode works -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/light.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/themes/dark.css">
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.20.1/cdn/shoelace-autoloader.js"></script>
+
+    <!-- qry shell + app styles (qry vendored locally — first-party, offline) -->
+    <link rel="stylesheet" href="qry/qry-ui.css">
+    <link rel="stylesheet" href="zqs.css">
+
+    <!-- Lucide (icons) -->
+    <script src="https://cdn.jsdelivr.net/npm/lucide@1.17.0/dist/umd/lucide.min.js"></script>
+
+    <!-- qry.js core (global $) -->
+    <script src="qry/qry.js"></script>
+</head>
+
+<body class="qry-app">
+
+<!-- Insight-style shell: header (brand · tabs · folder · params) ·
+     body (gallery | splitter | viewer) · footer (toggle · status · mode · zoom).
+     Fully client-side: ZigZag + the committee + ZQS all run in a Web Worker. -->
+<div class="zqs-app">
+
+    <!-- ── Header ───────────────────────────────────────────────────────── -->
+    <header class="zqs-header">
+        <span class="zqs-brand"><span class="zqs-brand-mark">⚡</span> ZQS Lab</span>
+
+        <nav class="zqs-tabs" role="tablist">
+            <button class="zqs-tab active" data-tab="zigzag" role="tab" aria-selected="true">
+                <i data-lucide="git-compare-arrows"></i><span>ZigZag</span>
+            </button>
+            <button class="zqs-tab" data-tab="methods" role="tab" aria-selected="false">
+                <i data-lucide="layout-grid"></i><span>All Methods</span>
+            </button>
+        </nav>
+
+        <span class="zqs-spacer"></span>
+
+        <div class="zqs-pathrow">
+            <sl-button id="pick-imgs" size="small" variant="primary">
+                <i data-lucide="folder-open" slot="prefix"></i> Open folder…</sl-button>
+            <sl-button id="pick-demo" size="small" title="Load the bundled demo set (data/wezut/)">
+                <i data-lucide="images" slot="prefix"></i> Demo set</sl-button>
+            <span id="folder-name" class="qry-mono zqs-folder-name"></span>
+        </div>
+        <button id="btn-params" class="zqs-iconbtn" aria-label="ZigZag parameters" title="ZigZag parameters">
+            <i data-lucide="sliders-horizontal"></i>
+        </button>
+        <input id="dir-input" type="file" webkitdirectory multiple accept="image/*" hidden>
+    </header>
+
+    <!-- ── Body: gallery · splitter · viewer ────────────────────────────── -->
+    <div class="zqs-body">
+
+        <aside class="zqs-left" id="left">
+            <div class="zqs-left-head">Images <span id="img-count" class="qry-mono"></span></div>
+            <div class="zqs-gallery" id="imglist" role="list"></div>
+        </aside>
+
+        <div class="zqs-split" id="split" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+
+        <main class="zqs-viewer" id="viewer">
+
+            <!-- ZigZag — original ⟷ zigzag split with a draggable divider -->
+            <section class="zqs-panel active" data-tab="zigzag">
+                <div class="zqs-stage empty" id="stage">
+                    <div class="zqs-canvas" id="canvas">
+                        <img class="zqs-cmp-after hide" id="cmp-after" alt="zigzag result">
+                        <img class="zqs-cmp-before hide" id="cmp-before" alt="original">
+                        <div class="zqs-split-line hide" id="split-line">
+                            <span class="zqs-split-grip" id="split-grip"></span>
+                        </div>
+                    </div>
+                    <span class="zqs-corner-tag tl hide" id="tag-orig">original</span>
+                    <span class="zqs-corner-tag tr hide" id="tag-res">zigzag</span>
+                    <div class="zqs-stage-empty" id="stage-empty">
+                        <i data-lucide="image-down"></i>
+                        <p>Open a folder, load the <strong>Demo set</strong>, or drop / paste photos here.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- All Methods — every committee binarization, best ZQS first -->
+            <section class="zqs-panel" data-tab="methods">
+                <div id="methods-grid" class="zqs-mgrid"></div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- ── Footer: toggle · status · pos · mode · zoom · theme ──────────── -->
+    <footer class="zqs-footer">
+        <sl-progress-bar id="progress-bar" value="0" class="zqs-foot-progress"></sl-progress-bar>
+
+        <button id="toggle-left" class="zqs-foot-toggle" title="Toggle gallery"><i data-lucide="panel-left"></i></button>
+        <span class="qry-label" id="status-label"><i data-lucide="image"></i> Open a folder</span>
+
+        <span class="zqs-foot-spacer"></span>
+
+        <span id="pos-info" class="qry-mono zqs-foot-pos"></span>
+
+        <div class="zqs-render-src" id="zz-modes" role="group" aria-label="Output">
+            <button class="zqs-srcbtn is-on" data-mode="binary">BW</button>
+            <button class="zqs-srcbtn" data-mode="gray">Gray</button>
+            <button class="zqs-srcbtn" data-mode="color">Color</button>
+        </div>
+
+        <div class="zqs-zoom">
+            <button id="zoom-fit" class="qry-btn" title="Fit width">Fit</button>
+            <button id="zoom-out" class="qry-btn" title="Zoom out"><i data-lucide="minus"></i></button>
+            <span id="zoom-pct" class="qry-mono">100%</span>
+            <button id="zoom-in" class="qry-btn" title="Zoom in"><i data-lucide="plus"></i></button>
+        </div>
+
+        <button id="btn-theme" class="zqs-foot-iconbtn" aria-label="Toggle theme" title="Toggle light / dark"><i data-lucide="moon"></i></button>
+    </footer>
+
+    <!-- ── Parameters drawer: ZigZag params (live) ──────────────────────── -->
+    <sl-drawer id="params-drawer" label="ZigZag parameters" placement="end" class="zqs-params-drawer">
+        <div class="zqs-section">Window &amp; threshold</div>
+        <div id="zz-params"></div>
+        <p class="zqs-drawer-note">Changes apply live to the current image and stream into the
+            committee grid. Defaults: <span class="qry-mono">size 25 · weight 90 · T 0%</span>.</p>
+        <sl-button slot="footer" id="params-reset"><i data-lucide="rotate-ccw" slot="prefix"></i> Defaults</sl-button>
+    </sl-drawer>
+
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
