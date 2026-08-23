@@ -1,0 +1,36 @@
+name: parity
+
+# The three ports must stay bit-identical; tools/parity.py is the proof.
+# It caught a real divergence once (Java decoded grayscale images through a
+# linear-gray colour space), so it runs on every change to a port.
+
+on:
+  push:
+    paths: ['ports/**', 'js/**', 'tools/**', '.github/workflows/parity.yml']
+  pull_request:
+    paths: ['ports/**', 'js/**', 'tools/**', '.github/workflows/parity.yml']
+  workflow_dispatch:
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: pip install numpy opencv-python-headless
+
+      - name: Python, Java and JS must agree pixel for pixel
+        run: python tools/parity.py

@@ -40,7 +40,7 @@ public class ZigZag {
 
     /** Parameters used, auto Otsu and applied threshold. */
     public static class Info {
-        public int size, weight, otsu = -1, threshold = -1;
+        public int size, weight, otsu, threshold;
     }
 
     public static class Result {
@@ -62,9 +62,9 @@ public class ZigZag {
                 gray[i] = Math.floor(r * 0.299 + g * 0.587 + b * 0.114 + 0.5);
             });
         } else {
-            int[] argb = img.getRGB(0, 0, w, h, null, 0, w);
+            int[] rgb = readRgb(img);
             IntStream.range(0, n).parallel().forEach(i -> {
-                int p = argb[i];
+                int p = rgb[i];
                 int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
                 gray[i] = Math.floor(r * 0.299 + g * 0.587 + b * 0.114 + 0.5);
             });
@@ -82,17 +82,45 @@ public class ZigZag {
         return ((java.awt.image.DataBufferByte) img.getRaster().getDataBuffer()).getData();
     }
 
-    /** ARGB pixels (color mode only). Fast path on the common BGR byte raster. */
-    static int[] readArgb(BufferedImage img) {
+    /** RGB pixels packed as 0xRRGGBB, read as sRGB samples.
+     *
+     *  Java models TYPE_BYTE_GRAY and TYPE_USHORT_GRAY in a *linear* gray colour
+     *  space, so getRGB() silently applies a linear->sRGB gamma conversion
+     *  (sample 1 becomes 13, 128 becomes 186). OpenCV and the browser canvas
+     *  take the stored samples as sRGB, so grayscale scans would binarize
+     *  differently in Java. We therefore read the raster directly, and only fall
+     *  back to getRGB() for palette images, where the colour model *is* the
+     *  pixel data. */
+    static int[] readRgb(BufferedImage img) {
         int w = img.getWidth(), h = img.getHeight(), n = w * h;
         byte[] bgr = bgrBytesOrNull(img);
-        if (bgr == null) return img.getRGB(0, 0, w, h, null, 0, w);
-        int[] argb = new int[n];
+        if (bgr != null) {
+            int[] px = new int[n];
+            IntStream.range(0, n).parallel().forEach(i -> {
+                int o = i * 3;
+                px[i] = ((bgr[o + 2] & 0xFF) << 16) | ((bgr[o + 1] & 0xFF) << 8) | (bgr[o] & 0xFF);
+            });
+            return px;
+        }
+        if (img.getColorModel() instanceof java.awt.image.IndexColorModel) {
+            int[] px = img.getRGB(0, 0, w, h, null, 0, w);
+            IntStream.range(0, n).parallel().forEach(i -> px[i] &= 0xFFFFFF);
+            return px;
+        }
+        java.awt.image.Raster ras = img.getRaster();
+        boolean rgbBands = ras.getNumBands() >= 3;              // else gray (+ alpha)
+        int shift = Math.max(0, ras.getSampleModel().getSampleSize(0) - 8);   // 16-bit -> 8
+        int[] s0 = ras.getSamples(0, 0, w, h, 0, (int[]) null);
+        int[] s1 = rgbBands ? ras.getSamples(0, 0, w, h, 1, (int[]) null) : s0;
+        int[] s2 = rgbBands ? ras.getSamples(0, 0, w, h, 2, (int[]) null) : s0;
+        int[] px = new int[n];
         IntStream.range(0, n).parallel().forEach(i -> {
-            int o = i * 3;
-            argb[i] = ((bgr[o + 2] & 0xFF) << 16) | ((bgr[o + 1] & 0xFF) << 8) | (bgr[o] & 0xFF);
+            int r = Math.min(255, s0[i] >> shift);
+            int g = Math.min(255, s1[i] >> shift);
+            int b = Math.min(255, s2[i] >> shift);
+            px[i] = (r << 16) | (g << 8) | b;
         });
-        return argb;
+        return px;
     }
 
     /** 2D box sum over [x-r..x+r]^2, zero-padded (truncated window), O(n). */
@@ -279,7 +307,7 @@ public class ZigZag {
             // luminance-guided: normalize once on luma, re-apply the original
             // colors, then the same antialiased white blend as gray mode
             double[] cov = coverage(fg, w, h, thr);
-            int[] argb = readArgb(img);
+            int[] argb = readRgb(img);
             int[] px = new int[n];
             IntStream.range(0, n).parallel().forEach(i -> {
                 double ratio = fg[i] / Math.max(1, gray[i]);
@@ -344,7 +372,15 @@ public class ZigZag {
             else if (a.equals("--no-upsample")) opts.upsample = false;
             else if (a.equals("--time")) showTime = true;
             else if (a.startsWith("--csv=")) csvPath = a.substring(6);
-            else if (!a.startsWith("--")) inputs.addAll(expand(a));
+            else if (a.startsWith("--")) {
+                System.out.println("Unknown option: " + a);
+                return;
+            }
+            else inputs.addAll(expand(a));
+        }
+        if (!java.util.List.of("binary", "gray", "color").contains(opts.mode)) {
+            System.out.println("Invalid --mode=" + opts.mode + " (expected binary, gray or color)");
+            return;
         }
         if (inputs.isEmpty()) {
             boolean hadPatterns = java.util.Arrays.stream(args).anyMatch(a -> !a.startsWith("--"));
@@ -403,14 +439,12 @@ public class ZigZag {
             totSave += tSave;
             count++;
             Info f = res.info;
-            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%s,%s,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f%n",
+            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%d,%d,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f%n",
                     csvField(input), csvField(dst.getPath()), opts.mode, f.size, f.weight,
-                    f.otsu >= 0 ? String.valueOf(f.otsu) : "",
-                    f.threshold >= 0 ? String.valueOf(f.threshold) : "",
-                    img.getWidth(), img.getHeight(),
+                    f.otsu, f.threshold, img.getWidth(), img.getHeight(),
                     res.image.getWidth(), res.image.getHeight(), tLoad, tProc, tSave));
-            String otsuS = f.threshold != f.otsu ? " thr=" + f.threshold + " (otsu=" + f.otsu + ")"
-                    : f.otsu >= 0 ? " otsu=" + f.otsu : "";
+            String otsuS = f.threshold != f.otsu
+                    ? " thr=" + f.threshold + " (otsu=" + f.otsu + ")" : " otsu=" + f.otsu;
             String timing = showTime
                     ? String.format(Locale.ROOT, "load %.0f | proc %.0f | save %.0f ms", tLoad, tProc, tSave)
                     : String.format(Locale.ROOT, "%.0f ms", tProc);
@@ -446,13 +480,17 @@ public class ZigZag {
             int wc = pattern.indexOf('*');
             int q = pattern.indexOf('?');
             if (q >= 0 && q < wc) wc = q;
-            int slash = pattern.lastIndexOf('/', wc);
+            int slash = Math.max(pattern.lastIndexOf('/', wc), pattern.lastIndexOf('\\', wc));
             java.nio.file.Path root = java.nio.file.Paths.get(slash >= 0 ? pattern.substring(0, slash) : ".");
-            var matcher = java.nio.file.FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+            // Java's glob requires ** to span at least one directory; Python's
+            // recursive glob lets it span zero, so also try the collapsed form
+            var deep = java.nio.file.FileSystems.getDefault().getPathMatcher("glob:" + pattern);
+            var flat = java.nio.file.FileSystems.getDefault()
+                    .getPathMatcher("glob:" + pattern.replace("/**/", "/").replace("\\**\\", "\\"));
             try (var st = java.nio.file.Files.walk(root)) {
                 st.filter(java.nio.file.Files::isRegularFile)
                   .map(java.nio.file.Path::normalize)
-                  .filter(matcher::matches)
+                  .filter(f -> deep.matches(f) || flat.matches(f))
                   .forEach(f -> out.add(new String[]{ f.toString(), root.relativize(f).toString() }));
             }
         } else {

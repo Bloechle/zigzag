@@ -9,6 +9,7 @@
     <meta property="og:image" content="https://bloechle.github.io/zigzag/assets/zigzag-logo.png">
     <meta property="og:url" content="https://bloechle.github.io/zigzag/">
     <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
     <meta name="theme-color" content="#0a0a0b">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -51,6 +52,10 @@
 
         .hidden { display: none !important; }
         button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+        :focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; border-radius: 6px; }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+        }
 
         /* ═══ LANDING ═══ */
         #landing {
@@ -78,6 +83,8 @@
         .btn-primary:active, .btn-secondary:active { transform: scale(.97); }
 
         .landing-hint { color: var(--muted); font-size: .78rem; }
+        .link-btn { color: var(--accent-soft); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+        .link-btn:disabled { opacity: .5; }
         #gpuStatus { margin-top: 8px; font-size: .72rem; color: var(--muted); min-height: 1.2em; }
         #gpuStatus.on { color: var(--ok); }
         .landing-credits {
@@ -114,7 +121,8 @@
             background: var(--accent); color: #fff;
             display: flex; align-items: center; justify-content: center;
         }
-        #compareWrap.toggled #compareLine { display: none; }
+        #compareWrap.toggled #compareLine,
+        #compareWrap.toggled #tagResult { display: none; }
 
         .corner-tag {
             position: absolute; top: 8px; font-size: .62rem; font-weight: 700; letter-spacing: .08em;
@@ -128,11 +136,16 @@
 
         #infoBadge {
             position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
-            max-width: calc(100% - 20px); white-space: nowrap; overflow: hidden;
-            font-size: .7rem; color: var(--dim); padding: 5px 12px; border-radius: 20px;
+            max-width: calc(100% - 20px); text-align: center; line-height: 1.4;
+            font-size: .7rem; color: var(--dim); padding: 5px 12px; border-radius: 14px;
             background: rgba(28, 28, 31, .75); border: 1px solid var(--border);
             backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            transition: transform .3s var(--ease);
         }
+        /* keep the live readout visible above the settings sheet */
+        #app.sheet-open #infoBadge { transform: translate(-50%, calc(-1 * var(--sheet-h, 0px) - 8px)); }
+
+        #infoBadge:empty { display: none; }
 
         #spinner {
             position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -162,10 +175,10 @@
         }
         .mode-btn.active { background: var(--accent); color: #fff; }
 
-        .action-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+        .action-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; }
         .action-btn {
             display: flex; flex-direction: column; align-items: center; gap: 4px;
-            padding: 8px 0 6px; border-radius: 9px; font-size: .68rem; color: var(--dim);
+            padding: 8px 2px 6px; border-radius: 9px; font-size: .66rem; color: var(--dim);
             transition: background .15s;
         }
         .action-btn:active { background: var(--bg-hover); }
@@ -187,9 +200,23 @@
         .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
         .sheet-title { font-weight: 600; font-size: .95rem; }
         .sheet-reset { font-size: .8rem; font-weight: 600; color: var(--accent-soft); padding: 4px 8px; }
-        .param-row { display: grid; grid-template-columns: 64px 1fr 38px; align-items: center; gap: 12px; margin-bottom: 14px; }
+        .sheet-actions { display: flex; align-items: center; gap: 4px; }
+        .sheet-help {
+            width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border);
+            color: var(--dim); font-size: .72rem; font-weight: 700; line-height: 1;
+            display: flex; align-items: center; justify-content: center;
+            transition: background .15s, color .15s, border-color .15s;
+        }
+        .sheet-help[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+        .param-row { display: grid; grid-template-columns: 88px 1fr 50px; align-items: center; gap: 12px; margin-bottom: 14px; }
         .param-row label { font-size: .8rem; color: var(--dim); }
         .param-val { font-size: .8rem; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+        .param-hint {
+            grid-column: 1 / -1; display: none;
+            font-size: .72rem; color: var(--muted); line-height: 1.45; margin: 2px 0 2px;
+        }
+        #sheet.hints .param-hint { display: block; }
 
         input[type=range] { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 2px; background: var(--border); outline: none; }
         input[type=range]::-webkit-slider-thumb {
@@ -225,10 +252,10 @@
                 Choose an image
             </button>
         </div>
-        <p class="landing-hint">or drop / paste an image</p>
-        <div id="gpuStatus"></div>
+        <p class="landing-hint">or drop / paste an image · <button id="btnExample" class="link-btn">try an example</button></p>
+        <div id="gpuStatus" role="status"></div>
         <div class="landing-credits">
-            <a href="https://github.com/Bloechle/ZigZag" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/Bloechle/zigzag" target="_blank" rel="noopener">GitHub</a>
             <span>·</span>
             <a href="https://doi.org/10.1145/3685650.3685661" target="_blank" rel="noopener">DocEng'24 paper</a>
             <span>·</span>
@@ -241,8 +268,8 @@
 <div id="app" class="hidden">
     <div id="viewport">
         <div id="compareWrap">
-            <canvas id="canvasResult"></canvas>
-            <div id="compareClip"><canvas id="canvasOriginal"></canvas></div>
+            <canvas id="canvasResult" role="img" aria-label="Cleaned-up document"></canvas>
+            <div id="compareClip"><canvas id="canvasOriginal" role="img" aria-label="Original photo"></canvas></div>
             <span id="tagOriginal" class="corner-tag">ORIGINAL</span>
             <span id="tagResult" class="corner-tag">ZIGZAG</span>
             <div id="compareLine">
@@ -251,30 +278,35 @@
                 </div>
             </div>
         </div>
-        <div id="infoBadge"></div>
+        <div id="infoBadge" role="status"></div>
         <div id="spinner" class="hidden"><div class="spinner-ring"></div></div>
     </div>
 
     <div class="bottom-bar">
-        <div class="mode-row" id="modeRow">
-            <button class="mode-btn active" data-mode="binary">B&amp;W</button>
-            <button class="mode-btn" data-mode="gray">Gray</button>
-            <button class="mode-btn" data-mode="color">Color</button>
+        <div class="mode-row" id="modeRow" role="radiogroup" aria-label="Output mode">
+            <button class="mode-btn active" data-mode="binary" role="radio" aria-checked="true">B&amp;W</button>
+            <button class="mode-btn" data-mode="gray" role="radio" aria-checked="false">Gray</button>
+            <button class="mode-btn" data-mode="color" role="radio" aria-checked="false">Color</button>
         </div>
         <div class="action-row">
-            <button id="btnNew" class="action-btn">
+            <button id="btnNew" class="action-btn" title="New image (N)">
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
                 <span>New</span>
             </button>
-            <button id="btnTune" class="action-btn">
+            <button id="btnRotate" class="action-btn" title="Rotate 90° (R)" disabled>
+                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                <span>Rotate</span>
+            </button>
+            <button id="btnTune" class="action-btn" title="Settings (T)">
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
                 <span>Tune</span>
             </button>
-            <button id="btnCopy" class="action-btn" disabled>
-                <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                <span>Copy</span>
+            <button id="btnShare" class="action-btn" title="Share or copy (C)" disabled>
+                <span class="icon-share"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg></span>
+                <span class="icon-copy"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+                <span class="lbl">Copy</span>
             </button>
-            <button id="btnSave" class="action-btn accent" disabled>
+            <button id="btnSave" class="action-btn accent" title="Save PNG (S)" disabled>
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 <span>Save</span>
             </button>
@@ -283,21 +315,39 @@
 
     <div id="sheet" class="hidden hidden-anim">
         <div class="sheet-backdrop" id="sheetBackdrop"></div>
-        <div class="sheet-panel">
+        <div class="sheet-panel" id="sheetPanel">
             <div class="sheet-drag-bar"></div>
             <div class="sheet-head">
                 <span class="sheet-title">Settings</span>
-                <button id="btnReset" class="sheet-reset">Reset</button>
+                <div class="sheet-actions">
+                    <button id="btnHints" class="sheet-help" aria-pressed="false"
+                            aria-label="Explain these settings" title="Explain these settings">?</button>
+                    <button id="btnReset" class="sheet-reset">Reset</button>
+                </div>
             </div>
             <div class="param-row">
-                <label for="slSize">Detail</label>
-                <input type="range" id="slSize" min="10" max="100" value="30" step="5">
-                <span id="valSize" class="param-val">30</span>
+                <label for="slSize">Window</label>
+                <input type="range" id="slSize" min="10" max="100" value="30" step="5"
+                       title="Size of the local analysis window, in pixels.">
+                <span id="valSize" class="param-val">30 px</span>
+                <p class="param-hint">How far ZigZag looks around each pixel to judge the local lighting.
+                   Lower it for fine print, raise it for large text or broad shadows.</p>
             </div>
             <div class="param-row">
-                <label for="slThr">Intensity</label>
-                <input type="range" id="slThr" min="-100" max="100" value="0" step="1">
+                <label for="slWeight">Background</label>
+                <input type="range" id="slWeight" min="50" max="100" value="90" step="5"
+                       title="How bright a pixel must be, relative to its neighbours, to count as background.">
+                <span id="valWeight" class="param-val">90 %</span>
+                <p class="param-hint">How bright a pixel must be, next to its neighbours, to be treated as
+                   background. Lower it to about 60 % to rescue faint ink on degraded documents.</p>
+            </div>
+            <div class="param-row">
+                <label for="slThr">Ink</label>
+                <input type="range" id="slThr" min="-100" max="100" value="0" step="1"
+                       title="Shifts the automatic threshold.">
                 <span id="valThr" class="param-val">0</span>
+                <p class="param-hint">Nudges the automatic threshold. Positive keeps more ink — bolder, but
+                   noisier; negative cleans harder at the risk of thinning strokes.</p>
             </div>
         </div>
     </div>
@@ -315,8 +365,8 @@
 <input type="file" id="fileGallery" accept="image/*" hidden>
 
 <script type="module">
-    import { ZigZag } from './zigzag.js';
-    import { ZigZagGPU } from './zigzag-gpu.js';
+    import { ZigZag } from './js/zigzag.js';
+    import { ZigZagGPU } from './js/zigzag-gpu.js';
 
     // PWA: offline cache + installability (no-op on file:// or unsupported)
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
@@ -327,20 +377,35 @@
     const el = {};
     ['landing', 'app', 'viewport', 'compareWrap', 'compareClip', 'compareLine',
      'canvasOriginal', 'canvasResult', 'infoBadge', 'spinner', 'gpuStatus',
-     'btnCamera', 'btnGallery', 'btnNew', 'btnTune', 'btnCopy', 'btnSave',
-     'modeRow', 'sheet', 'sheetBackdrop', 'btnReset', 'slSize', 'slThr', 'valSize', 'valThr',
+     'btnCamera', 'btnGallery', 'btnExample',
+     'btnNew', 'btnRotate', 'btnTune', 'btnShare', 'btnSave',
+     'modeRow', 'sheet', 'sheetBackdrop', 'sheetPanel', 'btnReset',
+     'slSize', 'slWeight', 'slThr', 'valSize', 'valWeight', 'valThr', 'btnHints',
      'dropOverlay', 'fileCamera', 'fileGallery'].forEach(id => el[id] = $(id));
 
-    const MAX_PIXELS = 12_000_000;   // keep CPU processing interactive
+    const SLIDERS = [['slSize', 'valSize'], ['slWeight', 'valWeight'], ['slThr', 'valThr']];
+    const UNITS = { slSize: ' px', slWeight: ' %', slThr: '' };
+    const MODES = ['binary', 'gray', 'color'];
+    const PREFS_KEY = 'zigzag.prefs';
+
+    // The CPU port needs ~64 bytes/pixel of float64 scratch and runs at ~0.4 s/MP,
+    // so it gets a much tighter budget than the GPU (whose ceiling is a device limit).
+    const CPU_MAX_PIXELS = 4_000_000;
+    const GPU_MAX_PIXELS = 12_000_000;
+
     let gpu = null;                  // WebGPU accelerator, null => CPU
+    let worker = null;               // CPU port off the main thread, null => inline
     let srcImage = null;             // ImageData of the (possibly downscaled) source
     let srcName = 'document';
     let origSize = null;             // [w, h] before downscale, or null
     let mode = 'binary';
     let busy = false, pending = false, debounceId = 0;
     let comparePos = 0.5, toggled = false;
+    let allowUpsample = true;        // cleared if the browser refuses the 2x canvas
+    let sheetOpen = false;
+    let lastBadge = '', badgeTimer = 0;
 
-    // ── GPU init (transparent CPU fallback on any failure) ──
+    // ── backends ──
     if (ZigZagGPU.isSupported()) {
         try {
             const g = new ZigZagGPU();
@@ -351,14 +416,101 @@
     el.gpuStatus.textContent = gpu ? '⚡ WebGPU acceleration active' : 'Running on CPU';
     el.gpuStatus.classList.toggle('on', !!gpu);
 
+    const jobs = new Map();
+    let jobId = 0;
+    try {
+        worker = new Worker(new URL('./js/zigzag-worker.js', import.meta.url), { type: 'module' });
+        worker.onmessage = e => {
+            const done = jobs.get(e.data.id);
+            jobs.delete(e.data.id);
+            done?.(e.data.error ? null : e.data);
+        };
+        worker.onerror = () => {                 // module workers unsupported / failed
+            worker = null;
+            for (const done of jobs.values()) done(null);
+            jobs.clear();
+        };
+    } catch { worker = null; }
+
+    /** CPU pipeline, in the worker when available, inline otherwise. */
+    function cpuProcess(opts) {
+        if (!worker) return Promise.resolve(ZigZag.process(srcImage, opts));
+        const id = ++jobId;
+        return new Promise(resolve => {
+            jobs.set(id, resolve);
+            worker.postMessage({ id, opts });
+        });
+    }
+
+    /** Transient message; the info badge returns after a couple of seconds. */
+    function notify(msg) {
+        if (el.landing.classList.contains('hidden')) {
+            el.infoBadge.textContent = msg;
+            clearTimeout(badgeTimer);
+            badgeTimer = setTimeout(() => { el.infoBadge.textContent = lastBadge; }, 2200);
+        } else {
+            el.gpuStatus.textContent = msg;
+            el.gpuStatus.classList.remove('on');
+        }
+    }
+
+    // ── preferences ──
+    function savePrefs() {
+        try {
+            localStorage.setItem(PREFS_KEY, JSON.stringify({
+                mode, size: el.slSize.value, weight: el.slWeight.value, thr: el.slThr.value,
+                hints: el.sheet.classList.contains('hints'),
+            }));
+        } catch { /* private mode */ }
+    }
+
+    function loadPrefs() {
+        try {
+            const p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
+            if (MODES.includes(p.mode)) setMode(p.mode, false);
+            if (p.hints) {
+                el.sheet.classList.add('hints');
+                el.btnHints.setAttribute('aria-pressed', 'true');
+            }
+            for (const [key, s] of [['size', 'slSize'], ['weight', 'slWeight'], ['thr', 'slThr']]) {
+                if (p[key] != null) el[s].value = p[key];
+            }
+        } catch { /* ignore corrupt prefs */ }
+        SLIDERS.forEach(([s, v]) => showSlider(s, v));
+    }
+
     // ── image loading ──
+    /** Install a new source image: GPU upload, worker upload, preview, run. */
+    async function setSource(image) {
+        srcImage = image;
+        if (gpu) {
+            try { await gpu.uploadImage(image); } catch { gpu = null; }
+        }
+        if (worker) {
+            const copy = new Uint8ClampedArray(image.data);
+            worker.postMessage(
+                { image: { data: copy, width: image.width, height: image.height } },
+                [copy.buffer]);
+        }
+        el.canvasOriginal.width = image.width;
+        el.canvasOriginal.height = image.height;
+        el.canvasOriginal.getContext('2d').putImageData(image, 0, 0);
+
+        el.landing.classList.add('hidden');
+        el.app.classList.remove('hidden');
+        el.btnRotate.disabled = false;
+        fitCanvases();
+        run();
+    }
+
     async function loadBlob(blob, name) {
+        const budget = gpu ? Math.min(gpu.maxPixels, GPU_MAX_PIXELS) : CPU_MAX_PIXELS;
         srcName = (name || 'document').replace(/\.[^/.]+$/, '');
-        const bmp = await createImageBitmap(blob);
+        const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
         let w = bmp.width, h = bmp.height;
-        origSize = (w * h > MAX_PIXELS) ? [w, h] : null;
+        origSize = (w * h > budget) ? [w, h] : null;
         if (origSize) {
-            const s = Math.sqrt(MAX_PIXELS / (w * h));
+            const s = Math.sqrt(budget / (w * h));
             w = Math.round(w * s);
             h = Math.round(h * s);
         }
@@ -367,26 +519,47 @@
         const ctx = c.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(bmp, 0, 0, w, h);
         bmp.close();
-        srcImage = ctx.getImageData(0, 0, w, h);
-        if (gpu) {
-            try { await gpu.uploadImage(srcImage); } catch { gpu = null; }
-        }
-
-        el.canvasOriginal.width = w;
-        el.canvasOriginal.height = h;
-        el.canvasOriginal.getContext('2d').putImageData(srcImage, 0, 0);
-
-        el.landing.classList.add('hidden');
-        el.app.classList.remove('hidden');
-        fitCanvases();
-        run();
+        await setSource(ctx.getImageData(0, 0, w, h));
     }
 
     function loadFile(file) {
-        if (file && file.type.startsWith('image/')) loadBlob(file, file.name);
+        if (!file) return;
+        if (!file.type.startsWith('image/')) return notify('Not an image file');
+        loadBlob(file, file.name).catch(() => notify(`Could not read “${file.name}”`));
     }
 
-    // ── processing (GPU first, CPU fallback) ──
+    /** Rotate the source 90° clockwise, keeping the current parameters.
+     *  Safe mid-run: the worker holds its own copy and run() supersedes itself. */
+    async function rotate() {
+        if (!srcImage) return;
+        const { width: w, height: h } = srcImage;
+        const c = document.createElement('canvas');
+        c.width = h; c.height = w;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.setTransform(0, 1, -1, 0, h, 0);   // (x, y) -> (h - y, x)
+        ctx.drawImage(await createImageBitmap(srcImage), 0, 0);
+        if (origSize) origSize = [origSize[1], origSize[0]];
+        await setSource(ctx.getImageData(0, 0, h, w));
+    }
+
+    // ── processing (GPU first, worker, then inline CPU) ──
+    /** Paint the result; false when the browser silently refused the canvas size. */
+    function showResult(res) {
+        const c = el.canvasResult;
+        c.width = res.width;
+        c.height = res.height;
+        if (c.width !== res.width || c.height !== res.height) return false;
+        const ctx = c.getContext('2d');
+        try {
+            ctx.putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
+            // over the browser's canvas-area limit the canvas stays blank instead
+            // of throwing, so probe a pixel we know is opaque
+            return ctx.getImageData(res.width - 1, res.height - 1, 1, 1).data[3] === 255;
+        } catch {
+            return false;
+        }
+    }
+
     async function run() {
         if (!srcImage) return;
         if (busy) { pending = true; return; }
@@ -397,7 +570,9 @@
         const opts = {
             mode,
             size: parseInt(el.slSize.value, 10),
+            weight: parseInt(el.slWeight.value, 10),
             thresholdOffset: parseInt(el.slThr.value, 10),
+            upsample: allowUpsample,
         };
         const t0 = performance.now();
         let res = null, backend = 'cpu';
@@ -407,25 +582,32 @@
                 backend = 'gpu';
             } catch { gpu = null; }
         }
-        if (!res) res = ZigZag.process(srcImage, opts);
+        if (!res) res = await cpuProcess(opts);
+        if (!res) res = ZigZag.process(srcImage, opts);   // worker died mid-flight
         const ms = performance.now() - t0;
 
-        el.canvasResult.width = res.width;
-        el.canvasResult.height = res.height;
-        el.canvasResult.getContext('2d')
-            .putImageData(new ImageData(res.data, res.width, res.height), 0, 0);
+        busy = false;
+        if (!showResult(res)) {
+            el.spinner.classList.add('hidden');
+            if (res.width > srcImage.width) {   // 2x is too big for this browser
+                allowUpsample = false;
+                return run();
+            }
+            return notify('Image too large for this browser');
+        }
 
         const i = res.info;
         const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
         const up = res.width !== srcImage.width ? ` → ${res.width}×${res.height}` : '';
         const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
-        el.infoBadge.textContent =
-            `${srcImage.width}×${srcImage.height}${ds}${up} · size ${i.size}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+        const wt = i.weight !== 90 ? ` · w ${i.weight}` : '';
+        clearTimeout(badgeTimer);
+        lastBadge = `${srcImage.width}×${srcImage.height}${ds}${up} · size ${i.size}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+        el.infoBadge.textContent = lastBadge;
 
         el.btnSave.disabled = false;
-        el.btnCopy.disabled = !window.ClipboardItem;
+        el.btnShare.disabled = false;
         el.spinner.classList.add('hidden');
-        busy = false;
         if (pending) { pending = false; run(); }
     }
 
@@ -560,79 +742,213 @@
 
     el.viewport.addEventListener('dblclick', fitCanvases);
 
+    // width-only: a height change (mobile URL bar, keyboard) must not reset zoom & pan
     if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(fitCanvases).observe(el.viewport);
+        let lastW = 0;
+        new ResizeObserver(() => {
+            const w = el.viewport.clientWidth;
+            if (w && w !== lastW) { lastW = w; fitCanvases(); }
+        }).observe(el.viewport);
     }
 
-    // ── bindings ──
+    // ── input sources ──
     el.btnCamera.addEventListener('click', () => el.fileCamera.click());
     el.btnGallery.addEventListener('click', () => el.fileGallery.click());
     for (const input of [el.fileCamera, el.fileGallery]) {
         input.addEventListener('change', () => { loadFile(input.files[0]); input.value = ''; });
     }
 
-    el.modeRow.addEventListener('click', e => {
-        const btn = e.target.closest('.mode-btn');
-        if (!btn || btn.dataset.mode === mode) return;
-        mode = btn.dataset.mode;
-        el.modeRow.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b === btn));
-        run();
+    el.btnExample.addEventListener('click', async () => {
+        el.btnExample.disabled = true;
+        try {
+            const r = await fetch('examples/02_04.jpg');
+            if (!r.ok) throw new Error(r.status);
+            await loadBlob(await r.blob(), 'example.jpg');
+        } catch {
+            notify('Example image unavailable');
+        }
+        el.btnExample.disabled = false;
     });
 
-    [['slSize', 'valSize'], ['slThr', 'valThr']].forEach(([s, v]) => {
+    // ── modes & parameters ──
+    function setMode(m, rerun = true) {
+        mode = m;
+        for (const b of el.modeRow.querySelectorAll('.mode-btn')) {
+            const on = b.dataset.mode === m;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-checked', String(on));
+        }
+        if (rerun) { savePrefs(); run(); }
+    }
+
+    el.modeRow.addEventListener('click', e => {
+        const btn = e.target.closest('.mode-btn');
+        if (btn && btn.dataset.mode !== mode) setMode(btn.dataset.mode);
+    });
+
+    function showSlider(s, v) {
+        const n = parseInt(el[s].value, 10);
+        el[v].textContent = (s === 'slThr' && n > 0 ? '+' + n : String(n)) + UNITS[s];
+    }
+
+    SLIDERS.forEach(([s, v]) => {
         el[s].addEventListener('input', () => {
-            const n = parseInt(el[s].value, 10);
-            el[v].textContent = s === 'slThr' && n > 0 ? '+' + n : String(n);
+            showSlider(s, v);
             clearTimeout(debounceId);
-            debounceId = setTimeout(run, 150);
+            debounceId = setTimeout(() => { savePrefs(); run(); }, 150);
         });
     });
 
+    // ── settings sheet ──
+    /** Lift the info badge by how far the panel intrudes into the viewport. */
+    function liftBadge() {
+        const intrusion = el.viewport.getBoundingClientRect().bottom
+            - (innerHeight - el.sheetPanel.offsetHeight);
+        el.app.style.setProperty('--sheet-h', Math.max(0, intrusion) + 'px');
+    }
+
     function showSheet(on) {
+        sheetOpen = on;
         if (on) {
             el.sheet.classList.remove('hidden');
+            liftBadge();
+            el.app.classList.add('sheet-open');
             requestAnimationFrame(() => el.sheet.classList.remove('hidden-anim'));
         } else {
+            el.app.classList.remove('sheet-open');
             el.sheet.classList.add('hidden-anim');
             setTimeout(() => el.sheet.classList.add('hidden'), 300);
         }
     }
-    el.btnTune.addEventListener('click', () => showSheet(true));
-    el.btnReset.addEventListener('click', () => {
-        let changed = false;
-        for (const [s, v] of [['slSize', 'valSize'], ['slThr', 'valThr']]) {
-            if (el[s].value !== el[s].defaultValue) {
-                el[s].value = el[s].defaultValue;   // defaults live in the HTML value attrs
-                el[v].textContent = el[s].value;
-                changed = true;
-            }
-        }
-        if (changed) run();
+    el.btnTune.addEventListener('click', () => showSheet(!sheetOpen));
+
+    el.btnHints.addEventListener('click', () => {
+        const on = el.sheet.classList.toggle('hints');
+        el.btnHints.setAttribute('aria-pressed', String(on));
+        liftBadge();
+        savePrefs();
     });
     el.sheetBackdrop.addEventListener('click', () => showSheet(false));
 
+    el.btnReset.addEventListener('click', () => {
+        let changed = false;
+        for (const [s, v] of SLIDERS) {
+            if (el[s].value !== el[s].defaultValue) {
+                el[s].value = el[s].defaultValue;   // defaults live in the HTML value attrs
+                showSlider(s, v);
+                changed = true;
+            }
+        }
+        if (changed) { savePrefs(); run(); }
+    });
+
+    // swipe the panel down to dismiss
+    let sheetDragY = null;
+    el.sheetPanel.addEventListener('pointerdown', e => {
+        if (e.target.closest('button')) return;   // never swallow Reset / help taps
+        if (!e.target.closest('.sheet-drag-bar, .sheet-head')) return;
+        sheetDragY = e.clientY;
+        el.sheetPanel.setPointerCapture(e.pointerId);
+        el.sheetPanel.style.transition = 'none';
+    });
+    el.sheetPanel.addEventListener('pointermove', e => {
+        if (sheetDragY !== null) {
+            el.sheetPanel.style.transform = `translateY(${Math.max(0, e.clientY - sheetDragY)}px)`;
+        }
+    });
+    const endSheetDrag = e => {
+        if (sheetDragY === null) return;
+        const dy = e.clientY - sheetDragY;
+        sheetDragY = null;
+        el.sheetPanel.style.transition = '';
+        el.sheetPanel.style.transform = '';
+        if (dy > 60) showSheet(false);
+    };
+    el.sheetPanel.addEventListener('pointerup', endSheetDrag);
+    el.sheetPanel.addEventListener('pointercancel', endSheetDrag);
+
+    // ── output ──
     el.btnNew.addEventListener('click', () => {
         srcImage = null;
+        origSize = null;
+        gpu?.destroy();                          // release the per-image GPU buffers
+        worker?.postMessage({ image: null });    // and the worker's copy
+        el.canvasResult.width = el.canvasResult.height = 0;
+        el.canvasOriginal.width = el.canvasOriginal.height = 0;
+        allowUpsample = true;
+        lastBadge = '';
+        el.infoBadge.textContent = '';
         el.btnSave.disabled = true;
-        el.btnCopy.disabled = true;
+        el.btnShare.disabled = true;
+        el.btnRotate.disabled = true;
         el.app.classList.add('hidden');
         el.landing.classList.remove('hidden');
     });
 
-    el.btnSave.addEventListener('click', () => {
-        el.canvasResult.toBlob(blob => {
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `${srcName}_ZZ.png`;
-            a.click();
-            URL.revokeObjectURL(a.href);
-        }, 'image/png');
-    });
+    const exportBlob = fn => el.canvasResult.toBlob(
+        b => b ? fn(b) : notify('Export failed'), 'image/png');
 
-    el.btnCopy.addEventListener('click', () => {
-        el.canvasResult.toBlob(blob => {
-            navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).catch(() => {});
-        }, 'image/png');
+    el.btnSave.addEventListener('click', () => exportBlob(blob => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${srcName}_ZZ.png`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }));
+
+    // one button: the native share sheet where files can be shared, clipboard elsewhere
+    const canShare = !!navigator.canShare?.(
+        { files: [new File([new Uint8Array(1)], 'probe.png', { type: 'image/png' })] });
+    el.btnShare.querySelector('.lbl').textContent = canShare ? 'Share' : 'Copy';
+    el.btnShare.querySelector(canShare ? '.icon-copy' : '.icon-share').classList.add('hidden');
+    if (!canShare && !window.ClipboardItem) el.btnShare.classList.add('hidden');
+
+    el.btnShare.addEventListener('click', () => exportBlob(async blob => {
+        const name = `${srcName}_ZZ.png`;
+        if (canShare) {
+            try {
+                await navigator.share({ files: [new File([blob], name, { type: 'image/png' })] });
+            } catch (err) {
+                if (err.name !== 'AbortError') notify('Sharing failed');
+            }
+            return;
+        }
+        try {
+            await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+            notify('Copied to clipboard');
+        } catch {
+            notify('Clipboard blocked by the browser');
+        }
+    }));
+
+    el.btnRotate.addEventListener('click', rotate);
+
+    // ── keyboard (desktop) ──
+    addEventListener('keydown', e => {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (e.key === 'Escape' && sheetOpen) { showSheet(false); e.preventDefault(); return; }
+        if (e.target.closest('input')) return;           // a focused slider owns its keys
+        if (el.app.classList.contains('hidden') || !srcImage) return;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            comparePos = Math.max(0.02, Math.min(0.98,
+                comparePos + (e.key === 'ArrowRight' ? 0.02 : -0.02)));
+            toggled = false;
+            applyCompare();
+            e.preventDefault();
+            return;
+        }
+        const k = e.key.toLowerCase();
+        if (k === '1' || k === '2' || k === '3') setMode(MODES[Number(k) - 1]);
+        else if (k === 'r') rotate();
+        else if (k === 't') showSheet(!sheetOpen);
+        else if (k === 's') el.btnSave.click();
+        else if (k === 'c') el.btnShare.click();
+        else if (k === 'n') el.btnNew.click();
+        else if (k === '0') fitCanvases();
+        else if (k === 'tab') return;
+        else if (e.key === ' ') { toggled = !toggled; applyCompare(); }
+        else return;
+        e.preventDefault();
     });
 
     // ── paste + drag-and-drop ──
@@ -655,6 +971,8 @@
         el.dropOverlay.classList.add('hidden');
         loadFile(e.dataTransfer?.files?.[0]);
     });
+
+    loadPrefs();
 </script>
 </body>
 </html>

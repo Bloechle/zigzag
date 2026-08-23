@@ -16,6 +16,8 @@ Backends (auto-detected): CuPy (NVIDIA GPU, optional `pip install cupy-cuda12x`)
 or OpenCV (CPU, SIMD box filters). Exact integer sums in float64 — outputs are
 identical across backends and across the Java/JS ports.
 
+Copyright (c) Jean-Luc Bloechle - AGPL v3
+
 CLI:
   python zigzag.py photo.jpg                     # binary, size 30, weight 90
   python zigzag.py -m color photo.jpg            # color foreground
@@ -146,6 +148,7 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
     sum_all = box(gray, r)
     cnt_all = window_counts(w, h, r, xp)
     mask = gray >= wf * sum_all / cnt_all
+    del sum_all, cnt_all          # released before Pass B allocates its own sums
 
     # Pass B — normalization against the local mean of background-only pixels
     cnt_bg = box(mask.astype(xp.float64), r)
@@ -181,15 +184,13 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
         m = (upsample2x(fg, xp) >= thr).astype(xp.float64)
         cov = (m[0::2, 0::2] + m[0::2, 1::2] + m[1::2, 0::2] + m[1::2, 1::2]) * 0.25
 
-    if mode == 'gray':
-        out = cov * 255.0 + (1.0 - cov) * fg
-        return host(xp.clip(out, 0, 255).astype(xp.uint8)), info
-
-    if mode == 'color':
-        # luminance-guided: normalize once on luma, re-apply the original colors
-        ratio = fg / xp.maximum(1.0, gray)
-        tc = xp.minimum(255.0, rgb.astype(xp.float64) * ratio[..., None])
-        out = cov[..., None] * 255.0 + (1.0 - cov[..., None]) * tc
+        if mode == 'gray':
+            out = cov * 255.0 + (1.0 - cov) * fg
+        else:
+            # luminance-guided: normalize once on luma, re-apply the original colors
+            ratio = fg / xp.maximum(1.0, gray)
+            tc = xp.minimum(255.0, rgb.astype(xp.float64) * ratio[..., None])
+            out = cov[..., None] * 255.0 + (1.0 - cov[..., None]) * tc
         return host(xp.clip(out, 0, 255).astype(xp.uint8)), info
 
     # binary — threshold, 2x upsample by default for detail preservation
@@ -286,9 +287,7 @@ def main():
         count += 1
         oh, ow = out.shape[:2]
         rows.append([path, dst, args.mode, info['size'], info['weight'],
-                     info['otsu'] if info['otsu'] is not None else '',
-                     info['threshold'] if info['threshold'] is not None else '',
-                     info['backend'],
+                     info['otsu'], info['threshold'], info['backend'],
                      rgb.shape[1], rgb.shape[0], ow, oh,
                      round(t_load, 1), round(t_proc, 1), round(t_save, 1)])
         otsu_s = (f"thr={info['threshold']} (otsu={info['otsu']}) · "
@@ -300,7 +299,7 @@ def main():
 
     if args.csv and rows:
         with open(args.csv, "w", newline="") as f:
-            w = csv.writer(f)
+            w = csv.writer(f, lineterminator="\n")
             w.writerow(["input", "output", "mode", "size", "weight", "otsu", "threshold",
                         "backend",
                         "in_width", "in_height", "out_width", "out_height",

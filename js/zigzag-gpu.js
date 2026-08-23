@@ -10,16 +10,24 @@
  * or toggling the 2x upsample reuses the cached foreground buffer, making
  * mode changes near-instant.
  *
+ * Imports zigzag.js for the Otsu threshold only, so the two backends can
+ * never silently diverge on it.
+ *
+ * Copyright (c) Jean-Luc Bloechle - AGPL v3
+ *
  * Usage:
  *   import { ZigZagGPU } from './zigzag-gpu.js';
  *   if (ZigZagGPU.isSupported()) {
  *       const gpu = new ZigZagGPU();
  *       await gpu.init();                      // throws if no adapter
+ *       gpu.maxPixels;                         // largest image this device accepts
  *       await gpu.uploadImage(imageData);      // once per image
  *       const res = await gpu.process({ mode: 'binary', size: 30, weight: 90 });
  *       // res: { data: Uint8ClampedArray (RGBA), width, height, info }
  *   }
  */
+
+import { ZigZag } from './zigzag.js';
 
 // ─── Params struct (32 bytes, 16-byte aligned) ──────────────────────────────
 
@@ -318,14 +326,26 @@ export class ZigZagGPU {
     #imgHeight = 0;
     #fgKey     = null;     // "size:weight" of the cached foreground buffer
     #otsu      = 127;      // threshold matching the cached foreground
+    #maxPixels = 0;        // largest image the device limits allow
 
     static isSupported() { return typeof navigator !== 'undefined' && !!navigator.gpu; }
+
+    /** Largest image (in pixels) this device can process — the 2x buffers are
+     *  16 bytes/pixel, and the default WebGPU storage binding limit is 128 MiB,
+     *  i.e. only ~8.4 MP unless the adapter allows more (it usually does). */
+    get maxPixels() { return this.#maxPixels; }
 
     async init() {
         if (!ZigZagGPU.isSupported()) throw new Error('WebGPU not supported');
         const adapter = await navigator.gpu.requestAdapter();
         if (!adapter) throw new Error('No GPU adapter found');
-        this.#device = await adapter.requestDevice();
+
+        const keys = ['maxStorageBufferBindingSize', 'maxBufferSize'];
+        const requiredLimits = Object.fromEntries(keys.map(k => [k, adapter.limits[k]]));
+        this.#device = await adapter.requestDevice({ requiredLimits });
+
+        const L = this.#device.limits;
+        this.#maxPixels = Math.floor(Math.min(L.maxStorageBufferBindingSize, L.maxBufferSize) / 16);
         this.#createPipelines();
     }
 
@@ -333,20 +353,25 @@ export class ZigZagGPU {
     async uploadImage(imageData) {
         const { width, height } = imageData;
         const n = width * height;
-        this.#ensureBuffers(n);
-        this.#imgWidth  = width;
-        this.#imgHeight = height;
-        this.#fgKey = null;
+        if (n > this.#maxPixels) {
+            throw new Error(`Image too large for this GPU (${n} > ${this.#maxPixels} px)`);
+        }
+        await this.#guard(() => {
+            this.#ensureBuffers(n);
+            this.#imgWidth  = width;
+            this.#imgHeight = height;
+            this.#fgKey = null;
 
-        const pixels = new Uint32Array(imageData.data.buffer, imageData.data.byteOffset, n);
-        this.#device.queue.writeBuffer(this.#bufs.input, 0, pixels);
-        this.#writeParams(width, height, 0, 0, 0, 0, width, height);
+            const pixels = new Uint32Array(imageData.data.buffer, imageData.data.byteOffset, n);
+            this.#device.queue.writeBuffer(this.#bufs.input, 0, pixels);
+            this.#writeParams(width, height, 0, 0, 0, 0, width, height);
 
-        const enc = this.#device.createCommandEncoder();
-        this.#dispatchWith(enc, 'grayscale', [
-            [0, this.#bufs.input], [1, this.#bufs.gray], [2, this.#bufs.params]
-        ], [Math.ceil(width / 16), Math.ceil(height / 16)]);
-        this.#device.queue.submit([enc.finish()]);
+            const enc = this.#device.createCommandEncoder();
+            this.#dispatchWith(enc, 'grayscale', [
+                [0, this.#bufs.input], [1, this.#bufs.gray], [2, this.#bufs.params]
+            ], [Math.ceil(width / 16), Math.ceil(height / 16)]);
+            this.#device.queue.submit([enc.finish()]);
+        });
     }
 
     /**
@@ -378,30 +403,32 @@ export class ZigZagGPU {
         const outW = is2x ? w * 2 : w, outH = is2x ? h * 2 : h;
         this.#writeParams(w, h, 0, 0, thr, 10, outW, outH);
 
-        const enc = this.#device.createCommandEncoder();
-        const xyDisp = [Math.ceil(w / 16), Math.ceil(h / 16)];
-        const outDisp = [Math.ceil(outW / 16), Math.ceil(outH / 16)];
-
-        if (mode === 'gray') {
-            this.#dispatchWith(enc, 'grayOut',
-                [[0, B.foreground], [1, B.output], [2, B.params]], xyDisp);
-        } else if (mode === 'color') {
-            this.#dispatchWith(enc, 'colorOut', [
-                [0, B.input], [1, B.gray], [2, B.foreground], [3, B.output], [4, B.params]
-            ], xyDisp);
-        } else if (is2x) {
-            this.#dispatchWith(enc, 'upsample',
-                [[0, B.foreground], [1, B.upsampled], [2, B.params]], outDisp);
-            this.#dispatchWith(enc, 'binarize',
-                [[0, B.upsampled], [1, B.output], [2, B.params]], outDisp);
-        } else {
-            this.#dispatchWith(enc, 'binarize',
-                [[0, B.foreground], [1, B.output], [2, B.params]], outDisp);
-        }
-
         const readBytes = outW * outH * 4;
-        enc.copyBufferToBuffer(B.output, 0, B.outStaging, 0, readBytes);
-        this.#device.queue.submit([enc.finish()]);
+        await this.#guard(() => {
+            const enc = this.#device.createCommandEncoder();
+            const xyDisp = [Math.ceil(w / 16), Math.ceil(h / 16)];
+            const outDisp = [Math.ceil(outW / 16), Math.ceil(outH / 16)];
+
+            if (mode === 'gray') {
+                this.#dispatchWith(enc, 'grayOut',
+                    [[0, B.foreground], [1, B.output], [2, B.params]], xyDisp);
+            } else if (mode === 'color') {
+                this.#dispatchWith(enc, 'colorOut', [
+                    [0, B.input], [1, B.gray], [2, B.foreground], [3, B.output], [4, B.params]
+                ], xyDisp);
+            } else if (is2x) {
+                this.#dispatchWith(enc, 'upsample',
+                    [[0, B.foreground], [1, B.upsampled], [2, B.params]], outDisp);
+                this.#dispatchWith(enc, 'binarize',
+                    [[0, B.upsampled], [1, B.output], [2, B.params]], outDisp);
+            } else {
+                this.#dispatchWith(enc, 'binarize',
+                    [[0, B.foreground], [1, B.output], [2, B.params]], outDisp);
+            }
+
+            enc.copyBufferToBuffer(B.output, 0, B.outStaging, 0, readBytes);
+            this.#device.queue.submit([enc.finish()]);
+        });
 
         await B.outStaging.mapAsync(GPUMapMode.READ, 0, readBytes);
         const data = new Uint8ClampedArray(B.outStaging.getMappedRange(0, readBytes).slice(0));
@@ -418,38 +445,40 @@ export class ZigZagGPU {
         this.#writeParams(w, h, hs, wf, 0, 10, w, h);
         this.#device.queue.writeBuffer(B.histogram, 0, new Uint32Array(256));
 
-        const enc = this.#device.createCommandEncoder();
-        const hDisp = [Math.ceil(h / 256)];
-        const vDisp = [Math.ceil(w / 256)];
-        const xyDisp = [Math.ceil(w / 16), Math.ceil(h / 16)];
+        await this.#guard(() => {
+            const enc = this.#device.createCommandEncoder();
+            const hDisp = [Math.ceil(h / 256)];
+            const vDisp = [Math.ceil(w / 256)];
+            const xyDisp = [Math.ceil(w / 16), Math.ceil(h / 16)];
 
-        // Pass A: sumAll -> mask
-        this.#dispatchWith(enc, 'hsum', [[0, B.gray], [1, B.hTemp], [2, B.params]], hDisp);
-        this.#dispatchWith(enc, 'vsum', [[0, B.hTemp], [1, B.sumAll], [2, B.params]], vDisp);
-        this.#dispatchWith(enc, 'mask', [
-            [0, B.gray], [1, B.sumAll], [2, B.maskVal], [3, B.maskCnt], [4, B.params]
-        ], xyDisp);
+            // Pass A: sumAll -> mask
+            this.#dispatchWith(enc, 'hsum', [[0, B.gray], [1, B.hTemp], [2, B.params]], hDisp);
+            this.#dispatchWith(enc, 'vsum', [[0, B.hTemp], [1, B.sumAll], [2, B.params]], vDisp);
+            this.#dispatchWith(enc, 'mask', [
+                [0, B.gray], [1, B.sumAll], [2, B.maskVal], [3, B.maskCnt], [4, B.params]
+            ], xyDisp);
 
-        // Pass B: masked sums -> foreground
-        this.#dispatchWith(enc, 'hsum', [[0, B.maskVal], [1, B.hTemp], [2, B.params]], hDisp);
-        this.#dispatchWith(enc, 'vsum', [[0, B.hTemp], [1, B.sumBg], [2, B.params]], vDisp);
-        this.#dispatchWith(enc, 'hsum', [[0, B.maskCnt], [1, B.hTemp], [2, B.params]], hDisp);
-        this.#dispatchWith(enc, 'vsum', [[0, B.hTemp], [1, B.cntBg], [2, B.params]], vDisp);
-        this.#dispatchWith(enc, 'foreground', [
-            [0, B.gray], [1, B.sumBg], [2, B.cntBg], [3, B.foreground], [4, B.params]
-        ], xyDisp);
+            // Pass B: masked sums -> foreground
+            this.#dispatchWith(enc, 'hsum', [[0, B.maskVal], [1, B.hTemp], [2, B.params]], hDisp);
+            this.#dispatchWith(enc, 'vsum', [[0, B.hTemp], [1, B.sumBg], [2, B.params]], vDisp);
+            this.#dispatchWith(enc, 'hsum', [[0, B.maskCnt], [1, B.hTemp], [2, B.params]], hDisp);
+            this.#dispatchWith(enc, 'vsum', [[0, B.hTemp], [1, B.cntBg], [2, B.params]], vDisp);
+            this.#dispatchWith(enc, 'foreground', [
+                [0, B.gray], [1, B.sumBg], [2, B.cntBg], [3, B.foreground], [4, B.params]
+            ], xyDisp);
 
-        // Histogram + readback
-        this.#dispatchWith(enc, 'histogram', [
-            [0, B.foreground], [1, B.histogram], [2, B.params]
-        ], xyDisp);
-        enc.copyBufferToBuffer(B.histogram, 0, B.histStaging, 0, 256 * 4);
-        this.#device.queue.submit([enc.finish()]);
+            // Histogram + readback
+            this.#dispatchWith(enc, 'histogram', [
+                [0, B.foreground], [1, B.histogram], [2, B.params]
+            ], xyDisp);
+            enc.copyBufferToBuffer(B.histogram, 0, B.histStaging, 0, 256 * 4);
+            this.#device.queue.submit([enc.finish()]);
+        });
 
         await B.histStaging.mapAsync(GPUMapMode.READ);
         const hist = new Uint32Array(B.histStaging.getMappedRange().slice(0));
         B.histStaging.unmap();
-        this.#otsu = this.#otsuThreshold(hist);
+        this.#otsu = ZigZag.otsu(hist);   // shared with the CPU port — never diverges
     }
 
     destroy() {
@@ -528,23 +557,13 @@ export class ZigZagGPU {
         pass.end();
     }
 
-    /** Standard Otsu, first-maximum tie-break, capped at 250 (as the CPU port). */
-    #otsuThreshold(hist) {
-        let total = 0, sum = 0;
-        for (let i = 0; i < 256; i++) { total += hist[i]; sum += i * hist[i]; }
-        if (total === 0) return 127;
-        let sumB = 0, wB = 0, maxVar = -1, thr = 127;
-        for (let t = 0; t < 256; t++) {
-            wB += hist[t];
-            if (wB === 0) continue;
-            const wF = total - wB;
-            if (wF === 0) break;
-            sumB += t * hist[t];
-            const mB = sumB / wB;
-            const mF = (sum - sumB) / wF;
-            const v  = wB * wF * (mB - mF) * (mB - mF);
-            if (v > maxVar) { maxVar = v; thr = t; }
-        }
-        return Math.min(250, thr);
+    /** WebGPU reports most validation errors asynchronously instead of throwing,
+     *  so encode/submit under an error scope and surface failures as exceptions —
+     *  that is what lets the caller fall back to the CPU port. */
+    async #guard(fn) {
+        this.#device.pushErrorScope('validation');
+        fn();
+        const err = await this.#device.popErrorScope();
+        if (err) throw new Error('WebGPU: ' + err.message);
     }
 }

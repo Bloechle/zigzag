@@ -13,6 +13,8 @@
  *
  * Dependency-free ES module, separable rolling sums (O(n)), float64.
  *
+ * Copyright (c) Jean-Luc Bloechle - AGPL v3
+ *
  * Usage (browser or Node):
  *   import { ZigZag } from './zigzag.js';
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
@@ -192,7 +194,7 @@ class ZigZag {
         const gray = ZigZag.grayImage(rgba, w, h);
 
         // Pass A — background classification against the weighted local mean
-        const sumAll = ZigZag.boxSum(gray, w, h, r);
+        let sumAll = ZigZag.boxSum(gray, w, h, r);
         const maskVal = new Float64Array(n);   // gray value where background, else 0
         const maskCnt = new Float64Array(n);   // 1 where background, else 0
         for (let y = 0; y < h; y++) {
@@ -206,6 +208,8 @@ class ZigZag {
                 }
             }
         }
+
+        sumAll = null;   // released before Pass B allocates its own sums
 
         // Pass B — normalization against the local mean of background-only pixels
         const cntBg = ZigZag.boxSum(maskCnt, w, h, r);
