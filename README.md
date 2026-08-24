@@ -21,6 +21,7 @@
 | [`sw.js`](sw.js) | PWA service worker — must stay at the repository root (GitHub Pages scope) |
 | [`tools/parity.py`](tools/parity.py) | Cross-port parity harness — proves the three ports agree bit for bit |
 | [`examples/`](examples/) | Sample input images and their binarized outputs |
+| [`assets/`](assets/) | Logo and app icons — SVG masters and the rendered PNGs |
 
 ## Algorithm
 
@@ -33,7 +34,7 @@ Output modes: `binary` (thresholded, 2× upsampled by default for detail preserv
 The three ports share the same float64 arithmetic and produce **bit-identical outputs** across languages, using separable rolling box sums in O(n). This is not a claim but a test: [`tools/parity.py`](tools/parity.py) runs all three over a matrix of images (colour, grayscale, RGBA, 16-bit, and degenerate 1-pixel-wide cases), modes and parameters, and compares every pixel.
 
 ```sh
-python tools/parity.py     # 216 comparisons — any divergence is a bug
+python tools/parity.py     # 264 comparisons — any divergence is a bug
 ```
 
 It runs in CI on every change to a port ([`.github/workflows/parity.yml`](.github/workflows/parity.yml)). It has already earned its keep: it caught the Java port decoding grayscale images through a linear-gray colour space, which shifted every sample (1 → 13, 128 → 186) against the Python and JS ports.
@@ -113,9 +114,9 @@ if (ZigZagGPU.isSupported()) {
 
 The 2× buffers cost 16 bytes per source pixel, and WebGPU's *default* storage-buffer binding limit is 128 MiB — only ~8.4 MP. `init()` therefore requests the adapter's real limits and exposes the resulting ceiling as `gpu.maxPixels`; downscale to it before uploading. Every submit runs inside a validation error scope, so a rejected dispatch throws instead of silently returning an unwritten buffer, which is what makes the CPU fallback reliable. The Otsu threshold is imported from `zigzag.js` rather than reimplemented, so the two backends cannot diverge on it.
 
-[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, rotate, tune **Window** (`size`, the analysis window in px), **Background** (`weight` — lower it to ~60 % to rescue faint ink on degraded documents) and **Ink** (`threshold-offset`), each with a plain-language explanation behind the **?** in the settings sheet, pinch-zoom and pan the full-width preview (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` `3` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `space` toggle original, `←` `→` move the comparison slider.
+[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, rotate, tune **Window** (`size`, the analysis window in px), **Background** (`weight` — lower it to ~60 % to rescue faint ink on degraded documents) and **Ink** (`threshold-offset`), each with a plain-language explanation behind the **?** in the settings sheet, pinch-zoom and pan the full-width preview (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` `3` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `space` toggle original, `←` `→` move the comparison slider, `Esc` close the settings.
 
-Everything runs on-device: on the GPU when WebGPU is available (Chrome, Edge, Safari 26+), otherwise on the CPU port in a Web Worker so the interface stays responsive — the status line shows which backend ran. When a browser refuses to allocate the 2× output canvas, the app drops to 1× rather than showing a blank result. The page is an installable PWA: add it to your home screen and it works fully offline (`manifest.json` + `sw.js`, stale-while-revalidate). It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
+Everything runs on-device: on the GPU when WebGPU is available (Chrome, Edge, Safari 26+, Firefox 141+ on Windows and macOS), otherwise on the CPU port in a Web Worker so the interface stays responsive — the status line shows which backend ran. When a browser refuses to allocate the 2× output canvas, the app drops to 1× rather than showing a blank result. The page is an installable PWA: add it to your home screen and it works offline (`manifest.json` + `sw.js`, stale-while-revalidate; the example photo is fetched on demand, so **try an example** needs one online visit first). It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
 
 ```sh
 python -m http.server   # then open http://localhost:8000

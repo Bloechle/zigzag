@@ -41,6 +41,7 @@ except Exception:
     HAS_GPU = False
 
 OTSU_CAP = 250
+MODES = ('binary', 'gray', 'color')
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -129,7 +130,7 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
-    if mode not in ('binary', 'gray', 'color'):
+    if mode not in MODES:
         raise ValueError(f"invalid mode: {mode!r} (expected binary, gray or color)")
     if backend is None or backend == 'auto':
         backend = 'gpu' if HAS_GPU else 'cpu'
@@ -206,7 +207,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="ZigZag — adaptive document image binarization (ACM DocEng 2024).")
     parser.add_argument("images", nargs="+", help="input image file(s)")
-    parser.add_argument("-m", "--mode", choices=["binary", "gray", "color"],
+    parser.add_argument("-m", "--mode", choices=MODES,
                         default="binary", help="output mode (default: binary)")
     parser.add_argument("-s", "--size", type=int, default=30,
                         help="window size in px, typically 10-100 (default: 30)")

@@ -28,6 +28,7 @@ import java.util.stream.IntStream;
 public class ZigZag {
 
     public static final int OTSU_CAP = 250;
+    static final java.util.List<String> MODES = java.util.List.of("binary", "gray", "color");
 
     /** Pipeline options. */
     public static class Options {
@@ -50,25 +51,14 @@ public class ZigZag {
 
     // -- helpers --------------------------------------------------------------
 
-    /** Rec. 601 luma, round-half-up. Fast path on the common BGR byte raster. */
-    static double[] grayImage(BufferedImage img) {
-        int w = img.getWidth(), h = img.getHeight(), n = w * h;
-        double[] gray = new double[n];
-        byte[] bgr = bgrBytesOrNull(img);
-        if (bgr != null) {
-            IntStream.range(0, n).parallel().forEach(i -> {
-                int o = i * 3;
-                int b = bgr[o] & 0xFF, g = bgr[o + 1] & 0xFF, r = bgr[o + 2] & 0xFF;
-                gray[i] = Math.floor(r * 0.299 + g * 0.587 + b * 0.114 + 0.5);
-            });
-        } else {
-            int[] rgb = readRgb(img);
-            IntStream.range(0, n).parallel().forEach(i -> {
-                int p = rgb[i];
-                int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
-                gray[i] = Math.floor(r * 0.299 + g * 0.587 + b * 0.114 + 0.5);
-            });
-        }
+    /** Rec. 601 luma, round-half-up, from 0xRRGGBB pixels. */
+    static double[] grayImage(int[] rgb) {
+        double[] gray = new double[rgb.length];
+        IntStream.range(0, rgb.length).parallel().forEach(i -> {
+            int p = rgb[i];
+            int r = (p >> 16) & 0xFF, g = (p >> 8) & 0xFF, b = p & 0xFF;
+            gray[i] = Math.floor(r * 0.299 + g * 0.587 + b * 0.114 + 0.5);
+        });
         return gray;
     }
 
@@ -250,10 +240,15 @@ public class ZigZag {
     // -- core pipeline (Algorithm 1 of the paper) -----------------------------
 
     public static Result process(BufferedImage img, Options opts) {
+        if (!MODES.contains(opts.mode)) {
+            throw new IllegalArgumentException(
+                    "invalid mode: " + opts.mode + " (expected binary, gray or color)");
+        }
         int w = img.getWidth(), h = img.getHeight(), n = w * h;
         int r = opts.size / 2;
         double wf = opts.weight / 100.0;
-        double[] gray = grayImage(img);
+        int[] rgb = readRgb(img);          // decoded once, reused by color mode
+        double[] gray = grayImage(rgb);
 
         // Pass A - background classification against the weighted local mean
         double[] sumAll = boxSum(gray, w, h, r);
@@ -307,12 +302,11 @@ public class ZigZag {
             // luminance-guided: normalize once on luma, re-apply the original
             // colors, then the same antialiased white blend as gray mode
             double[] cov = coverage(fg, w, h, thr);
-            int[] argb = readRgb(img);
             int[] px = new int[n];
             IntStream.range(0, n).parallel().forEach(i -> {
                 double ratio = fg[i] / Math.max(1, gray[i]);
                 double c = cov[i], k = 1.0 - c;
-                int p = argb[i], v = 0;
+                int p = rgb[i], v = 0;
                 for (int ch = 0; ch < 3; ch++) {
                     int shift = 16 - 8 * ch;
                     double tc = Math.min(255, ((p >> shift) & 0xFF) * ratio);
@@ -386,7 +380,7 @@ public class ZigZag {
             }
             else inputs.addAll(expand(a));
         }
-        if (!java.util.List.of("binary", "gray", "color").contains(opts.mode)) {
+        if (!MODES.contains(opts.mode)) {
             System.out.println("Invalid --mode=" + opts.mode + " (expected binary, gray or color)");
             return;
         }

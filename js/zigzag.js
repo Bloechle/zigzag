@@ -286,4 +286,4 @@ class ZigZag {
     }
 }
 
-export { ZigZag };
+export { ZigZag, MODES };

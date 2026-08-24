@@ -66,6 +66,10 @@ def corpus(d):
     put("gray_png", gray)                                    # linear-gray trap in Java
     put("gray_jpg", gray, "jpg", [cv2.IMWRITE_JPEG_QUALITY, 95])
     put("rgba_png", cv2.cvtColor(bgr, cv2.COLOR_BGR2BGRA))
+    # 16-bit samples: every reader must map them to 8-bit the same way (>> 8)
+    to16 = lambda a: np.minimum(65535, a.astype(np.uint32) * 257 + 200).astype(np.uint16)
+    put("gray16_png", to16(gray))
+    put("color16_png", to16(bgr))
     put("tiny", np.array([[10, 200], [250, 5]], dtype=np.uint8))
     put("row", np.arange(60, dtype=np.uint8).reshape(1, 60))  # window wider than image
     put("column", np.arange(60, dtype=np.uint8).reshape(60, 1))

@@ -1,7 +1,7 @@
 /*
  * zigzag-gpu.js - optional WebGPU accelerator for ZigZag.
  *
- * Same pipeline as zigzag.js (the CPU reference port), executed as WGSL
+ * Same pipeline as zigzag.js (the CPU port), executed as WGSL
  * compute shaders: typically 10-50 ms where the CPU takes ~1 s. Arithmetic
  * is float32 (WebGPU has no f64), so a handful of boundary pixels may differ
  * from the CPU output by +/-1 gray level - visually identical.
@@ -27,7 +27,7 @@
  *   }
  */
 
-import { ZigZag } from './zigzag.js';
+import { ZigZag, MODES } from './zigzag.js';
 
 // ─── Params struct (32 bytes, 16-byte aligned) ──────────────────────────────
 
@@ -385,7 +385,7 @@ export class ZigZagGPU {
     async process(opts = {}) {
         if (!this.#imgWidth) throw new Error('Call uploadImage() first');
         const mode = opts.mode ?? 'binary';
-        if (mode !== 'binary' && mode !== 'gray' && mode !== 'color') {
+        if (!MODES.includes(mode)) {
             throw new Error(`invalid mode: ${mode} (expected binary, gray or color)`);
         }
         const size = opts.size ?? 30;
