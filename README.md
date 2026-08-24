@@ -2,11 +2,11 @@
 
 # ZigZag
 
-**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built around integral images, it is fast, accurate, and simple — it ranked **first** in the [DocEng'24 binarization competition](https://doi.org/10.1145/3685650.3686793) and took the [**Douglas Engelbart Best Paper Award**](https://www.sigweb.org/awards).
+**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built around integral images, it is fast, accurate, and simple.
 
 **[▶ Try the live demo](https://bloechle.github.io/zigzag/)** — runs entirely in your browser, no upload.
 
-📄 Read the paper: [*ZigZag: A Robust Adaptive Approach to Non-Uniformly Illuminated Document Image Binarization*](https://doi.org/10.1145/3685650.3685661) — ACM DocEng 2024.
+📄 Read the paper: [*ZigZag: A Robust Adaptive Approach to Non-Uniformly Illuminated Document Image Binarization*](https://doi.org/10.1145/3685650.3685661) — ACM DocEng 2024, where it received the [best paper award](https://www.sigweb.org/awards) and ranked first in the [binarization competition](https://doi.org/10.1145/3685650.3686793).
 
 ## Repository layout
 
@@ -44,10 +44,10 @@ One file; requires NumPy and OpenCV:
 
 ```sh
 pip install numpy opencv-python
-python ports/zigzag.py photo.jpg                          # binary, size 30, weight 90
-python ports/zigzag.py -m color photo.jpg                 # color foreground
-python ports/zigzag.py -s 40 -w 60 old_letter.jpg         # historical documents
-python ports/zigzag.py -t *.jpg -o cleaned/               # batch into a directory, with timings
+python zigzag.py photo.jpg                          # binary, size 30, weight 90
+python zigzag.py -m color photo.jpg                 # color foreground
+python zigzag.py -s 40 -w 60 old_letter.jpg         # historical documents
+python zigzag.py -t *.jpg -o cleaned/               # batch into a directory, with timings
 ```
 
 The result is written next to each input as `<name>_ZZ.png`. Options: `-o` output file — or directory when batching; `-T` threshold offset; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, thresholds, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
@@ -56,19 +56,19 @@ The result is written next to each input as `<name>_ZZ.png`. Options: `-o` outpu
 
 ```sh
 pip install cupy-cuda12x
-python ports/zigzag.py photo.jpg                          # gpu when available
-python ports/zigzag.py -b cpu photo.jpg                   # force a backend (auto|gpu|cpu)
+python zigzag.py photo.jpg                          # gpu when available
+python zigzag.py -b cpu photo.jpg                   # force a backend (auto|gpu|cpu)
 ```
 
 ## Java
 
-One file, no dependencies, multi-threaded across all cores. Works on **Java 11+** and runs directly — no compilation step. The same file runs unmodified on every newer JDK, and typically faster: on one test machine JDK 25 processed a single-core image in 845 ms where JDK 21 took 1130 ms on identical bytecode (~25%, the JIT auto-vectorizes the pixel loops better). The exact gain is machine- and image-dependent, but using the latest JDK you have is generally worth it. It deliberately sticks to stable APIs — no incubator modules (e.g. the Vector API) — so the flag-free launch below always works:
+One file, no dependencies, multi-threaded across all cores. Works on **Java 11+** and runs directly — no compilation step. The same file runs unmodified on every newer JDK, and noticeably faster: **JDK 25 processes ~25% faster than JDK 21** on identical bytecode (measured: 1130 → 845 ms/image on a single core; the JIT auto-vectorizes the pixel loops better) — use the latest JDK you have. It deliberately sticks to stable APIs — no incubator modules (e.g. the Vector API) — so the flag-free launch below always works:
 
 ```sh
-java ports/ZigZag.java photo.jpg                          # binary, size 30, weight 90
-java ports/ZigZag.java photo.jpg --mode=color             # color foreground
-java ports/ZigZag.java old_letter.jpg --size=40 --weight=60 --output=clean.png
-java ports/ZigZag.java *.jpg --output=cleaned/ --time     # batch into a directory, with timings
+java ZigZag.java photo.jpg                          # binary, size 30, weight 90
+java ZigZag.java photo.jpg --mode=color             # color foreground
+java ZigZag.java old_letter.jpg --size=40 --weight=60 --output=clean.png
+java ZigZag.java *.jpg --output=cleaned/ --time     # batch into a directory, with timings
 ```
 
 Options: `--mode=binary|gray|color` · `--size=N` · `--weight=N` · `--threshold-offset=N` · `--output=path|dir` · `--no-upsample` · `--time` (separate load / process / save timings plus a batch summary) · `--csv=path` (per-image metrics as CSV, same columns as the Python CLI). Accepts multiple inputs; `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory.
@@ -95,7 +95,7 @@ ZigZag.Result res = ZigZag.process(image, opts);
 </script>
 ```
 
-Like the Python and Java ports, `thresholdOffset` (default 0) shifts the auto Otsu threshold; `info` reports both the auto and the applied values. All three ports reject an unknown `mode` rather than quietly falling back to `binary`.
+Like the Python and Java ports, `thresholdOffset` (default 0) shifts the auto Otsu threshold; `info` reports both the auto and the applied values.
 
 [`zigzag-gpu.js`](js/zigzag-gpu.js) is an optional WebGPU accelerator running the same pipeline as compute shaders — typically 10-50 ms where the CPU port takes around a second. The foreground is cached on the GPU, so switching the output mode, the 2× upsample or the threshold offset is near-instant. WebGPU uses float32 (no f64), so a handful of boundary pixels may differ from the CPU output by ±1 gray level — visually identical:
 
@@ -111,11 +111,11 @@ if (ZigZagGPU.isSupported()) {
 }
 ```
 
-The 2× buffers cost 16 bytes per source pixel, and WebGPU's *default* storage-buffer binding limit is 128 MiB — only ~8.4 MP. `init()` therefore requests the adapter's real limits and exposes the resulting ceiling as `gpu.maxPixels`; downscale to it before uploading. Every submit runs inside a validation error scope, so a rejected dispatch throws instead of silently returning an unwritten buffer, which is what makes the CPU fallback reliable. `process()` is single-flight — it maps one staging buffer per call, so await the returned promise before calling it again. The Otsu threshold is imported from `zigzag.js` rather than reimplemented, so the two backends cannot diverge on it.
+The 2× buffers cost 16 bytes per source pixel, and WebGPU's *default* storage-buffer binding limit is 128 MiB — only ~8.4 MP. `init()` therefore requests the adapter's real limits and exposes the resulting ceiling as `gpu.maxPixels`; downscale to it before uploading. Every submit runs inside a validation error scope, so a rejected dispatch throws instead of silently returning an unwritten buffer, which is what makes the CPU fallback reliable. The Otsu threshold is imported from `zigzag.js` rather than reimplemented, so the two backends cannot diverge on it.
 
-[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, rotate, tune **Window** (`size`, the analysis window in px), **Background** (`weight` — lower it to ~60 % to rescue faint ink on degraded documents) and **Ink** (`threshold-offset`), each with a plain-language explanation behind the **?** in the settings sheet. The three sliders step through fixed scales rather than a continuous range — window 4→128 px (coarser as it grows), background 50→100 % in steps of 10, ink offset ±60 in steps of 5 — so every notch changes the result visibly. The window stops at 128 px on purpose: beyond roughly 192 the local mean drifts toward a global one and the shadow reappears as ink, and `(2r+1)²·255` crosses 2²³, past which the GPU's f32 box sums no longer represent integer sums exactly. The CLIs keep the full continuous range, pinch-zoom and pan the full-width preview (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` `3` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `space` toggle original, `←` `→` move the comparison slider.
+[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, rotate, tune **Window** (`size`, the analysis window in px), **Background** (`weight` — lower it to ~60 % to rescue faint ink on degraded documents) and **Ink** (`threshold-offset`), each with a plain-language explanation behind the **?** in the settings sheet, pinch-zoom and pan the full-width preview (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` `3` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `space` toggle original, `←` `→` move the comparison slider.
 
-Everything runs on-device: on the GPU when WebGPU is available (Chrome, Edge, Safari 26+), otherwise on the CPU port in a Web Worker so the interface stays responsive — the status line shows which backend ran. When a browser refuses to allocate the 2× output canvas, the app drops to 1× rather than showing a blank result. The page is an installable PWA: add it to your home screen and it works fully offline (`manifest.json` + `sw.js`, stale-while-revalidate). The service worker precaches the app shell only — the 560 KB sample behind *try an example* is fetched on demand, so that one button needs a connection the first time. It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
+Everything runs on-device: on the GPU when WebGPU is available (Chrome, Edge, Safari 26+), otherwise on the CPU port in a Web Worker so the interface stays responsive — the status line shows which backend ran. When a browser refuses to allocate the 2× output canvas, the app drops to 1× rather than showing a blank result. The page is an installable PWA: add it to your home screen and it works fully offline (`manifest.json` + `sw.js`, stale-while-revalidate). It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
 
 ```sh
 python -m http.server   # then open http://localhost:8000
