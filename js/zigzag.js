@@ -21,6 +21,7 @@
  */
 
 const OTSU_CAP = 250;
+const MODES = ['binary', 'gray', 'color'];
 
 class ZigZag {
 
@@ -183,6 +184,9 @@ class ZigZag {
         const { width: w, height: h } = imageData;
         const rgba = imageData.data;
         const mode = opts.mode ?? 'binary';
+        if (!MODES.includes(mode)) {
+            throw new Error(`invalid mode: ${mode} (expected binary, gray or color)`);
+        }
         const size = opts.size ?? 30;
         const weight = opts.weight ?? 90;
         const upsample = opts.upsample ?? true;

@@ -129,6 +129,8 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
+    if mode not in ('binary', 'gray', 'color'):
+        raise ValueError(f"invalid mode: {mode!r} (expected binary, gray or color)")
     if backend is None or backend == 'auto':
         backend = 'gpu' if HAS_GPU else 'cpu'
     if backend == 'gpu' and not HAS_GPU:

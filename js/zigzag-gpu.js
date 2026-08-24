@@ -378,10 +378,16 @@ export class ZigZagGPU {
      * Run the pipeline. The foreground (and its Otsu threshold) is cached:
      * calling again with the same size/weight only re-runs the output stage.
      * Returns { data, width, height, info } like ZigZag.process().
+     *
+     * Single-flight: one staging buffer is mapped per call, so the returned
+     * promise must settle before process() is called again.
      */
     async process(opts = {}) {
         if (!this.#imgWidth) throw new Error('Call uploadImage() first');
         const mode = opts.mode ?? 'binary';
+        if (mode !== 'binary' && mode !== 'gray' && mode !== 'color') {
+            throw new Error(`invalid mode: ${mode} (expected binary, gray or color)`);
+        }
         const size = opts.size ?? 30;
         const weight = opts.weight ?? 90;
         const upsample = opts.upsample ?? true;

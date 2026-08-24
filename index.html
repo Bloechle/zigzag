@@ -327,7 +327,7 @@
             </div>
             <div class="param-row">
                 <label for="slSize">Window</label>
-                <input type="range" id="slSize" min="10" max="100" value="30" step="5"
+                <input type="range" id="slSize" min="0" max="10" value="6" step="1"
                        title="Size of the local analysis window, in pixels.">
                 <span id="valSize" class="param-val">30 px</span>
                 <p class="param-hint">How far ZigZag looks around each pixel to judge the local lighting.
@@ -335,7 +335,7 @@
             </div>
             <div class="param-row">
                 <label for="slWeight">Background</label>
-                <input type="range" id="slWeight" min="50" max="100" value="90" step="5"
+                <input type="range" id="slWeight" min="0" max="5" value="4" step="1"
                        title="How bright a pixel must be, relative to its neighbours, to count as background.">
                 <span id="valWeight" class="param-val">90 %</span>
                 <p class="param-hint">How bright a pixel must be, next to its neighbours, to be treated as
@@ -343,7 +343,7 @@
             </div>
             <div class="param-row">
                 <label for="slThr">Ink</label>
-                <input type="range" id="slThr" min="-100" max="100" value="0" step="1"
+                <input type="range" id="slThr" min="0" max="24" value="12" step="1"
                        title="Shifts the automatic threshold.">
                 <span id="valThr" class="param-val">0</span>
                 <p class="param-hint">Nudges the automatic threshold. Positive keeps more ink — bolder, but
@@ -385,6 +385,30 @@
 
     const SLIDERS = [['slSize', 'valSize'], ['slWeight', 'valWeight'], ['slThr', 'valThr']];
     const UNITS = { slSize: ' px', slWeight: ' %', slThr: '' };
+
+    // Discrete scales: the slider carries an *index*, the value comes from here.
+    // Window stops at 128 for two independent reasons - past ~192 the local mean
+    // drifts toward global and the shadow comes back as ink, and (2r+1)^2*255
+    // crosses 2^23, where the GPU's f32 box sums stop representing integer sums
+    // exactly. Weight steps of 5 were indistinguishable (<0.15 pt of ink), so 10.
+    // Ink stops at +/-60: beyond it the threshold saturates instead of nudging.
+    const SCALES = {
+        slSize:   [4, 8, 12, 16, 20, 24, 30, 40, 56, 80, 128],
+        slWeight: [50, 60, 70, 80, 90, 100],
+        slThr:    Array.from({ length: 25 }, (_, i) => -60 + i * 5),
+    };
+    const DEFAULTS = { slSize: 30, slWeight: 90, slThr: 0 };
+
+    const sliderValue = s => SCALES[s][+el[s].value];
+    /** Snap a raw value onto a scale (also migrates prefs from an older scale). */
+    function setSliderValue(s, v) {
+        const scale = SCALES[s];
+        let best = 0;
+        for (let i = 1; i < scale.length; i++) {
+            if (Math.abs(scale[i] - v) < Math.abs(scale[best] - v)) best = i;
+        }
+        el[s].value = best;
+    }
     const MODES = ['binary', 'gray', 'color'];
     const PREFS_KEY = 'zigzag.prefs';
 
@@ -458,7 +482,10 @@
     function savePrefs() {
         try {
             localStorage.setItem(PREFS_KEY, JSON.stringify({
-                mode, size: el.slSize.value, weight: el.slWeight.value, thr: el.slThr.value,
+                mode,
+                size: sliderValue('slSize'),
+                weight: sliderValue('slWeight'),
+                thr: sliderValue('slThr'),
                 hints: el.sheet.classList.contains('hints'),
             }));
         } catch { /* private mode */ }
@@ -473,7 +500,7 @@
                 el.btnHints.setAttribute('aria-pressed', 'true');
             }
             for (const [key, s] of [['size', 'slSize'], ['weight', 'slWeight'], ['thr', 'slThr']]) {
-                if (p[key] != null) el[s].value = p[key];
+                if (p[key] != null) setSliderValue(s, +p[key]);   // snaps old values
             }
         } catch { /* ignore corrupt prefs */ }
         SLIDERS.forEach(([s, v]) => showSlider(s, v));
@@ -483,6 +510,7 @@
     /** Install a new source image: GPU upload, worker upload, preview, run. */
     async function setSource(image) {
         srcImage = image;
+        allowUpsample = true;     // a previous oversized image must not stick at 1x
         if (gpu) {
             try { await gpu.uploadImage(image); } catch { gpu = null; }
         }
@@ -503,23 +531,30 @@
         run();
     }
 
+    /** Bitmap or ImageData -> ImageData, downscaled to fit a pixel budget. */
+    async function toImageData(src, budget) {
+        const n = src.width * src.height;
+        const s = n > budget ? Math.sqrt(budget / n) : 1;
+        const w = Math.max(1, Math.round(src.width * s));
+        const h = Math.max(1, Math.round(src.height * s));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        const own = src instanceof ImageData;
+        const bmp = own ? await createImageBitmap(src) : src;
+        ctx.drawImage(bmp, 0, 0, w, h);
+        if (own) bmp.close();
+        return ctx.getImageData(0, 0, w, h);
+    }
+
     async function loadBlob(blob, name) {
         const budget = gpu ? Math.min(gpu.maxPixels, GPU_MAX_PIXELS) : CPU_MAX_PIXELS;
         srcName = (name || 'document').replace(/\.[^/.]+$/, '');
         const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
-        let w = bmp.width, h = bmp.height;
-        origSize = (w * h > budget) ? [w, h] : null;
-        if (origSize) {
-            const s = Math.sqrt(budget / (w * h));
-            w = Math.round(w * s);
-            h = Math.round(h * s);
-        }
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        const ctx = c.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(bmp, 0, 0, w, h);
+        origSize = (bmp.width * bmp.height > budget) ? [bmp.width, bmp.height] : null;
+        const image = await toImageData(bmp, budget);
         bmp.close();
-        await setSource(ctx.getImageData(0, 0, w, h));
+        await setSource(image);
     }
 
     function loadFile(file) {
@@ -569,9 +604,9 @@
 
         const opts = {
             mode,
-            size: parseInt(el.slSize.value, 10),
-            weight: parseInt(el.slWeight.value, 10),
-            thresholdOffset: parseInt(el.slThr.value, 10),
+            size: sliderValue('slSize'),
+            weight: sliderValue('slWeight'),
+            thresholdOffset: sliderValue('slThr'),
             upsample: allowUpsample,
         };
         const t0 = performance.now();
@@ -580,7 +615,18 @@
             try {
                 res = await gpu.process(opts);
                 backend = 'gpu';
-            } catch { gpu = null; }
+            } catch {
+                gpu = null;
+                // the source was sized for the GPU budget; the CPU port needs
+                // ~64 bytes/pixel of float64 scratch, so shrink before falling back
+                if (srcImage.width * srcImage.height > CPU_MAX_PIXELS) {
+                    busy = false;                 // setSource() re-enters run()
+                    pending = false;
+                    origSize ??= [srcImage.width, srcImage.height];
+                    notify('GPU unavailable — reduced for the CPU');
+                    return setSource(await toImageData(srcImage, CPU_MAX_PIXELS));
+                }
+            }
         }
         if (!res) res = await cpuProcess(opts);
         if (!res) res = ZigZag.process(srcImage, opts);   // worker died mid-flight
@@ -593,6 +639,7 @@
                 allowUpsample = false;
                 return run();
             }
+            pending = false;
             return notify('Image too large for this browser');
         }
 
@@ -787,7 +834,7 @@
     });
 
     function showSlider(s, v) {
-        const n = parseInt(el[s].value, 10);
+        const n = sliderValue(s);
         el[v].textContent = (s === 'slThr' && n > 0 ? '+' + n : String(n)) + UNITS[s];
     }
 
@@ -833,8 +880,9 @@
     el.btnReset.addEventListener('click', () => {
         let changed = false;
         for (const [s, v] of SLIDERS) {
-            if (el[s].value !== el[s].defaultValue) {
-                el[s].value = el[s].defaultValue;   // defaults live in the HTML value attrs
+            const before = el[s].value;
+            setSliderValue(s, DEFAULTS[s]);
+            if (el[s].value !== before) {
                 showSlider(s, v);
                 changed = true;
             }
@@ -972,6 +1020,12 @@
         loadFile(e.dataTransfer?.files?.[0]);
     });
 
+    for (const [s] of SLIDERS) {          // attributes follow SCALES, never the HTML
+        el[s].min = 0;
+        el[s].max = SCALES[s].length - 1;
+        el[s].step = 1;
+        setSliderValue(s, DEFAULTS[s]);
+    }
     loadPrefs();
 </script>
 </body>

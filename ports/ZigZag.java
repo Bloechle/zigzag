@@ -358,6 +358,10 @@ public class ZigZag {
 
     // -- CLI ------------------------------------------------------------------
 
+    static final String USAGE = "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
+            + "[--mode=binary|gray|color] [--size=N] [--weight=N] [--threshold-offset=N] "
+            + "[--no-upsample] [--time] [--csv=path]";
+
     public static void main(String[] args) throws Exception {
         java.util.List<String[]> inputs = new java.util.ArrayList<>();
         String output = null, csvPath = null;
@@ -372,6 +376,10 @@ public class ZigZag {
             else if (a.equals("--no-upsample")) opts.upsample = false;
             else if (a.equals("--time")) showTime = true;
             else if (a.startsWith("--csv=")) csvPath = a.substring(6);
+            else if (a.equals("--help") || a.equals("-h")) {
+                System.out.println(USAGE);
+                return;
+            }
             else if (a.startsWith("--")) {
                 System.out.println("Unknown option: " + a);
                 return;
@@ -384,10 +392,7 @@ public class ZigZag {
         }
         if (inputs.isEmpty()) {
             boolean hadPatterns = java.util.Arrays.stream(args).anyMatch(a -> !a.startsWith("--"));
-            System.out.println(hadPatterns ? "No input images found."
-                    : "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
-                    + "[--mode=binary|gray|color] [--size=N] [--weight=N] [--threshold-offset=N] "
-                    + "[--no-upsample] [--time] [--csv=path]");
+            System.out.println(hadPatterns ? "No input images found." : USAGE);
             return;
         }
 
@@ -439,7 +444,7 @@ public class ZigZag {
             totSave += tSave;
             count++;
             Info f = res.info;
-            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%d,%d,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f%n",
+            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%d,%d,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f\n",
                     csvField(input), csvField(dst.getPath()), opts.mode, f.size, f.weight,
                     f.otsu, f.threshold, img.getWidth(), img.getHeight(),
                     res.image.getWidth(), res.image.getHeight(), tLoad, tProc, tSave));
