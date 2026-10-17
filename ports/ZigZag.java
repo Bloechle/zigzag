@@ -9,7 +9,8 @@
  * Two-pass local mean filtering: Pass A classifies likely background pixels
  * against the weighted local mean; Pass B normalizes each pixel against the
  * local mean of background-only pixels, equalizing illumination before a
- * single global Otsu threshold.
+ * single global Otsu threshold; ink specks below an area that scales with the
+ * window are then removed (despeckle).
  *
  * Single file, no dependencies, separable rolling sums (O(n)), parallel.
  * Run directly with Java 11+ (no compilation step):
@@ -27,10 +28,10 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.1.0";
+    public static final String VERSION = "1.2.0";
     public static final int OTSU_CAP = 250;
-    /** Options.size value that selects the automatic window size. */
-    public static final int AUTO = 0;
+    /** Options.size / Options.despeckle value that selects the automatic rule. */
+    public static final int AUTO = -1;
     static final java.util.List<String> MODES = java.util.List.of("binary", "gray", "color");
 
     /** Pipeline options. */
@@ -40,11 +41,12 @@ public class ZigZag {
         public int weight = 90;
         public boolean upsample = true;
         public int thresholdOffset = 0;    // manual shift of the auto Otsu threshold
+        public int despeckle = AUTO;       // smallest ink component kept (px), 0 = keep all
     }
 
     /** Parameters used, auto Otsu and applied threshold. */
     public static class Info {
-        public int size, weight, otsu, threshold;
+        public int size, weight, otsu, threshold, despeckle;
         public boolean autoSize;
     }
 
@@ -54,6 +56,14 @@ public class ZigZag {
     public static int autoSize(int w, int h) {
         double diag = Math.sqrt((double) w * w + (double) h * h);
         return (int) Math.min(250, Math.max(20, Math.floor(diag / 45 + 0.5)));
+    }
+
+    /** Automatic despeckle area: ink specks smaller than round(size^2 / 225)
+     *  pixels are removed (an area, so it scales as the square of the window:
+     *  2 px at size 20, 4 at 30, 26 at 77). Integer arithmetic, identical in
+     *  every port. */
+    public static int autoDespeckle(int size) {
+        return (int) ((2L * size * size + 225) / 450);
     }
 
     public static class Result {
@@ -127,17 +137,31 @@ public class ZigZag {
 
     /** 2D box sum over [x-r..x+r]^2, zero-padded (truncated window), O(n). */
     static double[] boxSum(double[] src, int w, int h, int r) {
+        // horizontal pass: the x loop is split where the window enters and
+        // leaves the row, so the inner loops carry no bounds tests; each x
+        // still adds, then removes, in the order of the single-loop form
         double[] tmp = new double[w * h];
-        IntStream.range(0, h).parallel().forEach(y -> {   // horizontal pass
+        int initR = Math.min(r, w - 1);
+        int addEnd = Math.max(1, w - r);      // x < addEnd  <=>  x + r < w
+        int remBeg = r + 1;                   // x >= remBeg <=>  x - r - 1 >= 0
+        IntStream.range(0, h).parallel().forEach(y -> {
             int base = y * w;
             double sum = 0;
-            int initR = Math.min(r, w - 1);
             for (int x = 0; x <= initR; x++) sum += src[base + x];
             tmp[base] = sum;
-            for (int x = 1; x < w; x++) {
-                int add = x + r, rem = x - r - 1;
-                if (add < w) sum += src[base + add];
-                if (rem >= 0) sum -= src[base + rem];
+            int x = 1;
+            for (int end = Math.min(addEnd, remBeg); x < end; x++) {        // add only
+                sum += src[base + x + r];
+                tmp[base + x] = sum;
+            }
+            for (; x < addEnd; x++) {                                       // add and remove
+                sum += src[base + x + r];
+                sum -= src[base + x - r - 1];
+                tmp[base + x] = sum;
+            }
+            for (; x < remBeg && x < w; x++) tmp[base + x] = sum;           // neither
+            for (; x < w; x++) {                                            // remove only
+                sum -= src[base + x - r - 1];
                 tmp[base + x] = sum;
             }
         });
@@ -206,32 +230,29 @@ public class ZigZag {
         return Math.min(OTSU_CAP, thr);
     }
 
-    /** Center-aligned 2x bilinear upsampling fused with thresholding:
-     *  vertical interpolation pass, then the horizontal pass writes the
-     *  binary bytes directly (no full-resolution float buffer). */
+    /** Center-aligned 2x bilinear upsampling fused with thresholding. At
+     *  exactly 2x every output sample sits at -0.25 / +0.25 of a source pixel,
+     *  so each source row yields two output rows from constant 0.25 / 0.75
+     *  weights - the same samples as coverage(), written as pixels instead of
+     *  being counted. */
     static byte[] upsampleBinarize(double[] src, int w, int h, int thr) {
-        int W = w * 2, H = h * 2;
-        double[] rows = new double[H * w];
-        IntStream.range(0, H).parallel().forEach(y2 -> {
-            double sy = (y2 + 0.5) * 0.5 - 0.5;
-            int y0 = (int) Math.floor(sy);
-            double fy = sy - y0;
-            int ya = Math.min(h - 1, Math.max(0, y0)) * w;
-            int yb = Math.min(h - 1, Math.max(0, y0 + 1)) * w;
-            int base = y2 * w;
-            for (int x = 0; x < w; x++) rows[base + x] = src[ya + x] * (1 - fy) + src[yb + x] * fy;
-        });
-        byte[] out = new byte[H * W];
-        IntStream.range(0, H).parallel().forEach(y2 -> {
-            int base = y2 * w, ob = y2 * W;
-            for (int x2 = 0; x2 < W; x2++) {
-                double sx = (x2 + 0.5) * 0.5 - 0.5;
-                int x0 = (int) Math.floor(sx);
-                double fx = sx - x0;
-                int xa = Math.min(w - 1, Math.max(0, x0));
-                int xb = Math.min(w - 1, Math.max(0, x0 + 1));
-                double v = rows[base + xa] * (1 - fx) + rows[base + xb] * fx;
-                out[ob + x2] = (byte) (v >= thr ? 255 : 0);
+        int W = w * 2;
+        byte[] out = new byte[W * h * 2];
+        IntStream.range(0, h).parallel().forEach(y -> {
+            double[] rowA = new double[w];   // y2 = 2y   (sy = y - 0.25)
+            double[] rowB = new double[w];   // y2 = 2y+1 (sy = y + 0.25)
+            int ya = Math.max(0, y - 1) * w, yc = y * w, yb = Math.min(h - 1, y + 1) * w;
+            for (int x = 0; x < w; x++) {
+                rowA[x] = src[ya + x] * 0.25 + src[yc + x] * 0.75;
+                rowB[x] = src[yc + x] * 0.75 + src[yb + x] * 0.25;
+            }
+            int oa = 2 * y * W, ob = oa + W;
+            for (int x = 0; x < w; x++) {
+                int xa = Math.max(0, x - 1), xb = Math.min(w - 1, x + 1);
+                out[oa + 2 * x]     = (rowA[xa] * 0.25 + rowA[x] * 0.75) >= thr ? (byte) 255 : 0;
+                out[oa + 2 * x + 1] = (rowA[x] * 0.75 + rowA[xb] * 0.25) >= thr ? (byte) 255 : 0;
+                out[ob + 2 * x]     = (rowB[xa] * 0.25 + rowB[x] * 0.75) >= thr ? (byte) 255 : 0;
+                out[ob + 2 * x + 1] = (rowB[x] * 0.75 + rowB[xb] * 0.25) >= thr ? (byte) 255 : 0;
             }
         });
         return out;
@@ -279,6 +300,10 @@ public class ZigZag {
         if (opts.weight <= 0) {
             throw new IllegalArgumentException("invalid weight: " + opts.weight + " (expected > 0)");
         }
+        int minArea = opts.despeckle == AUTO ? autoDespeckle(size) : opts.despeckle;
+        if (minArea < 0) {
+            throw new IllegalArgumentException("invalid despeckle: " + opts.despeckle + " (expected >= 0, or AUTO)");
+        }
         int r = size / 2;
         double wf = opts.weight / 100.0;
         int[] rgb = readRgb(img);          // decoded once, reused by color mode
@@ -318,6 +343,12 @@ public class ZigZag {
         int thr = Math.min(255, Math.max(0, otsuThr + opts.thresholdOffset));
         info.otsu = otsuThr;
         info.threshold = thr;
+        info.despeckle = minArea;
+
+        // Despeckle: ink components smaller than the area become paper. Done on
+        // the 1x foreground, before any output: a removed speck's neighbours are
+        // all paper, so every 2x sample around it is paper too, in every mode.
+        if (minArea > 1) despeckle(fg, w, h, thr, minArea);
 
         if (opts.mode.equals("gray")) {
             // antialiased background cleanup: blend toward white with the 2x2
@@ -371,6 +402,47 @@ public class ZigZag {
     }
 
     /** fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows -> 255. */
+    /** Turn 8-connected ink components (fg < thr) smaller than minArea into
+     *  paper (255). One raster scan with union-find; a root holds its
+     *  component's size as a negative number, so one int per pixel suffices. */
+    static void despeckle(double[] fg, int w, int h, int thr, int minArea) {
+        int[] parent = new int[w * h];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int i = y * w + x;
+                if (fg[i] >= thr) continue;
+                parent[i] = -1;
+                if (x > 0 && fg[i - 1] < thr) union(parent, i, i - 1);
+                if (y > 0) {
+                    int up = i - w;
+                    if (x > 0 && fg[up - 1] < thr) union(parent, i, up - 1);
+                    if (fg[up] < thr) union(parent, i, up);
+                    if (x < w - 1 && fg[up + 1] < thr) union(parent, i, up + 1);
+                }
+            }
+        }
+        for (int i = 0; i < w * h; i++) {
+            if (fg[i] < thr && -parent[find(parent, i)] < minArea) fg[i] = 255;
+        }
+    }
+
+    static int find(int[] parent, int i) {
+        while (parent[i] >= 0) {
+            int p = parent[i];
+            if (parent[p] >= 0) parent[i] = parent[p];   // path halving
+            i = p;
+        }
+        return i;
+    }
+
+    static void union(int[] parent, int a, int b) {
+        int ra = find(parent, a), rb = find(parent, b);
+        if (ra == rb) return;
+        if (parent[ra] > parent[rb]) { int t = ra; ra = rb; rb = t; }   // ra = larger
+        parent[ra] += parent[rb];
+        parent[rb] = ra;
+    }
+
     static double[] normalize(double[] channel, double[] masked, double[] cntBg,
                               int w, int h, int r) {
         double[] sumBg = boxSum(masked, w, h, r);
@@ -389,6 +461,7 @@ public class ZigZag {
 
     static final String USAGE = "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
             + "[--mode=binary|gray|color] [--size=N|auto] [--weight=N] [--threshold-offset=N] "
+            + "[--despeckle=N|auto] "
             + "[--no-upsample] [--time] [--csv=path] [--version]";
 
     /** Exit status: 0 success, 1 an input failed, 2 bad command line. */
@@ -418,6 +491,8 @@ public class ZigZag {
             else if (a.equals("--size=auto")) opts.size = AUTO;
             else if (a.startsWith("--size=")) { if ((v = intArg("--size", a.substring(7), 2)) != null) opts.size = v; }
             else if (a.startsWith("--weight=")) { if ((v = intArg("--weight", a.substring(9), 1)) != null) opts.weight = v; }
+            else if (a.equals("--despeckle=auto")) opts.despeckle = AUTO;
+            else if (a.startsWith("--despeckle=")) { if ((v = intArg("--despeckle", a.substring(12), 0)) != null) opts.despeckle = v; }
             else if (a.startsWith("--threshold-offset=")) {
                 if ((v = intArg("--threshold-offset", a.substring(19), Integer.MIN_VALUE)) != null) opts.thresholdOffset = v;
             }
@@ -458,7 +533,7 @@ public class ZigZag {
         }
 
         StringBuilder csv = new StringBuilder(
-                "input,output,mode,size,weight,otsu,threshold,backend,in_width,in_height,"
+                "input,output,mode,size,weight,otsu,threshold,despeckle,backend,in_width,in_height,"
                 + "out_width,out_height,load_ms,proc_ms,save_ms\n");
         double totLoad = 0, totProc = 0, totSave = 0;
         int count = 0, failed = 0;
@@ -500,9 +575,9 @@ public class ZigZag {
             totSave += tSave;
             count++;
             Info f = res.info;
-            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%d,%d,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f\n",
+            csv.append(String.format(Locale.ROOT, "%s,%s,%s,%d,%d,%d,%d,%d,cpu,%d,%d,%d,%d,%.1f,%.1f,%.1f\n",
                     csvField(input), csvField(dst.getPath()), opts.mode, f.size, f.weight,
-                    f.otsu, f.threshold, img.getWidth(), img.getHeight(),
+                    f.otsu, f.threshold, f.despeckle, img.getWidth(), img.getHeight(),
                     res.image.getWidth(), res.image.getHeight(), tLoad, tProc, tSave));
             String sizeS = f.autoSize ? f.size + " (auto)" : String.valueOf(f.size);
             String otsuS = f.threshold != f.otsu
@@ -510,8 +585,8 @@ public class ZigZag {
             String timing = showTime
                     ? String.format(Locale.ROOT, "load %.0f | proc %.0f | save %.0f ms", tLoad, tProc, tSave)
                     : String.format(Locale.ROOT, "%.0f ms", tProc);
-            System.out.printf(Locale.ROOT, "%s -> %s  [size=%s weight=%d%s | %s]%n",
-                    input, dst, sizeS, f.weight, otsuS, timing);
+            System.out.printf(Locale.ROOT, "%s -> %s  [size=%s weight=%d despeckle=%d%s | %s]%n",
+                    input, dst, sizeS, f.weight, f.despeckle, otsuS, timing);
         }
         if (csvPath != null && count > 0) {
             java.nio.file.Files.writeString(java.nio.file.Paths.get(csvPath), csv.toString());

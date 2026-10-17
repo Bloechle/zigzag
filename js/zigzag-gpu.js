@@ -10,6 +10,11 @@
  * or toggling the 2x upsample reuses the cached foreground buffer, making
  * mode changes near-instant.
  *
+ * The despeckle (a connected-component pass, sequential by nature) runs on
+ * the CPU with the very function the CPU port uses: the foreground is read
+ * back once, cleaned, and uploaded again; the result is cached per
+ * threshold and area.
+ *
  * Imports zigzag.js for the Otsu threshold only, so the two backends can
  * never silently diverge on it.
  *
@@ -27,7 +32,7 @@
  *   }
  */
 
-import { ZigZag, resolveOptions } from './zigzag.js';
+import { ZigZag, resolveOptions, despeckle } from './zigzag.js';
 
 /** Largest window whose box sums stay exact in float32: (2r+1)^2 * 255 < 2^24.
  *  The automatic size tops out at 250, well inside it. */
@@ -330,6 +335,8 @@ export class ZigZagGPU {
     #imgHeight = 0;
     #fgKey     = null;     // "size:weight" of the cached foreground buffer
     #otsu      = 127;      // threshold matching the cached foreground
+    #fgHost    = null;     // CPU copy of that foreground, read back on demand
+    #cleanKey  = null;     // "threshold:area" of the despeckled foreground
     #maxPixels = 0;        // largest image the device limits allow
 
     static isSupported() { return typeof navigator !== 'undefined' && !!navigator.gpu; }
@@ -365,6 +372,8 @@ export class ZigZagGPU {
             this.#imgWidth  = width;
             this.#imgHeight = height;
             this.#fgKey = null;
+            this.#fgHost = null;
+            this.#cleanKey = null;
 
             const pixels = new Uint32Array(imageData.data.buffer, imageData.data.byteOffset, n);
             this.#device.queue.writeBuffer(this.#bufs.input, 0, pixels);
@@ -390,7 +399,7 @@ export class ZigZagGPU {
         if (!this.#imgWidth) throw new Error('Call uploadImage() first');
         const w = this.#imgWidth, h = this.#imgHeight;
         // same defaults and validation as the CPU port (size: auto from the diagonal)
-        const { mode, size, weight, upsample, thresholdOffset: offset, auto } =
+        const { mode, size, weight, upsample, thresholdOffset: offset, despeckle: minArea, auto } =
             resolveOptions(opts, w, h);
         if (size > GPU_MAX_SIZE) {
             throw new RangeError(`size ${size} exceeds the GPU limit (${GPU_MAX_SIZE}); use the CPU port`);
@@ -402,9 +411,12 @@ export class ZigZagGPU {
         if (this.#fgKey !== key) {
             await this.#computeForeground(w, h, size, weight);
             this.#fgKey = key;
+            this.#fgHost = null;
+            this.#cleanKey = null;
         }
         const thr = Math.min(255, Math.max(0, this.#otsu + offset));
-        const info = { size, autoSize: auto, weight, otsu: this.#otsu, threshold: thr };
+        const info = { size, autoSize: auto, weight, otsu: this.#otsu, threshold: thr, despeckle: minArea };
+        const fg = minArea > 1 ? await this.#despeckled(thr, minArea) : B.foreground;
 
         // ─── output stage ───
         const is2x = mode === 'binary' && upsample;
@@ -419,19 +431,19 @@ export class ZigZagGPU {
 
             if (mode === 'gray') {
                 this.#dispatchWith(enc, 'grayOut',
-                    [[0, B.foreground], [1, B.output], [2, B.params]], xyDisp);
+                    [[0, fg], [1, B.output], [2, B.params]], xyDisp);
             } else if (mode === 'color') {
                 this.#dispatchWith(enc, 'colorOut', [
-                    [0, B.input], [1, B.gray], [2, B.foreground], [3, B.output], [4, B.params]
+                    [0, B.input], [1, B.gray], [2, fg], [3, B.output], [4, B.params]
                 ], xyDisp);
             } else if (is2x) {
                 this.#dispatchWith(enc, 'upsample',
-                    [[0, B.foreground], [1, B.upsampled], [2, B.params]], outDisp);
+                    [[0, fg], [1, B.upsampled], [2, B.params]], outDisp);
                 this.#dispatchWith(enc, 'binarize',
                     [[0, B.upsampled], [1, B.output], [2, B.params]], outDisp);
             } else {
                 this.#dispatchWith(enc, 'binarize',
-                    [[0, B.foreground], [1, B.output], [2, B.params]], outDisp);
+                    [[0, fg], [1, B.output], [2, B.params]], outDisp);
             }
 
             enc.copyBufferToBuffer(B.output, 0, B.outStaging, 0, readBytes);
@@ -443,6 +455,31 @@ export class ZigZagGPU {
         B.outStaging.unmap();
 
         return { data, width: outW, height: outH, info };
+    }
+
+    /** The foreground with ink specks under minArea turned to paper, as a GPU
+     *  buffer: read back once per foreground, cleaned by the CPU port's own
+     *  despeckle(), uploaded, and cached for this threshold and area. */
+    async #despeckled(thr, minArea) {
+        const B = this.#bufs;
+        const key = thr + ':' + minArea;
+        if (this.#cleanKey === key) return B.cleaned;
+        const w = this.#imgWidth, h = this.#imgHeight, bytes = w * h * 4;
+        if (!this.#fgHost) {
+            await this.#guard(() => {
+                const enc = this.#device.createCommandEncoder();
+                enc.copyBufferToBuffer(B.foreground, 0, B.outStaging, 0, bytes);
+                this.#device.queue.submit([enc.finish()]);
+            });
+            await B.outStaging.mapAsync(GPUMapMode.READ, 0, bytes);
+            this.#fgHost = new Float32Array(B.outStaging.getMappedRange(0, bytes).slice(0));
+            B.outStaging.unmap();
+        }
+        const fg = this.#fgHost.slice();
+        despeckle(fg, w, h, thr, minArea);
+        this.#device.queue.writeBuffer(B.cleaned, 0, fg);
+        this.#cleanKey = key;
+        return B.cleaned;
     }
 
     /** Submit 1: Pass A + Pass B + histogram readback -> Otsu threshold. */
@@ -495,6 +532,8 @@ export class ZigZagGPU {
         this.#curSize = 0;
         this.#imgWidth = 0;
         this.#fgKey = null;
+        this.#fgHost = null;
+        this.#cleanKey = null;
     }
 
     // ═══ Private infrastructure ═════════════════════════════════════════════
@@ -534,7 +573,8 @@ export class ZigZagGPU {
         this.#bufs.maskCnt     = buf(nb,      S);
         this.#bufs.sumBg       = buf(nb,      S);
         this.#bufs.cntBg       = buf(nb,      S);
-        this.#bufs.foreground  = buf(nb,      S);
+        this.#bufs.foreground  = buf(nb,      S | CS);
+        this.#bufs.cleaned     = buf(nb,      S | CD);   // despeckled foreground
         this.#bufs.upsampled   = buf(nb4,     S);
         this.#bufs.histogram   = buf(256 * 4, S | CD | CS);
         this.#bufs.output      = buf(nb4,     S | CS);

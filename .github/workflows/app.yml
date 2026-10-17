@@ -1,0 +1,29 @@
+name: app
+
+# Pushing to main publishes the web app (GitHub Pages), so the app is checked
+# on every change to it: GPU accelerator against the CPU port, the app's
+# controls and an offline reload, in headless Chromium with a software WebGPU.
+
+on:
+  push:
+    paths: ['index.html', 'sw.js', 'manifest.json', 'js/**', 'assets/**', 'examples/**',
+            'tools/app_check.py', '.github/workflows/app.yml']
+  pull_request:
+    paths: ['index.html', 'sw.js', 'manifest.json', 'js/**', 'assets/**', 'examples/**',
+            'tools/app_check.py', '.github/workflows/app.yml']
+  workflow_dispatch:
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+
+      - name: Web app, GPU against CPU, offline
+        run: python tools/app_check.py

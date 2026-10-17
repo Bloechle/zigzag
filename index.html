@@ -225,6 +225,19 @@
         }
         input[type=range]::-moz-range-thumb { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); border: none; }
 
+        /* on/off switch, built on a checkbox so keyboard and screen readers get it for free */
+        .switch {
+            -webkit-appearance: none; appearance: none; justify-self: start; cursor: pointer;
+            width: 38px; height: 22px; border-radius: 11px; background: var(--border);
+            position: relative; transition: background .15s;
+        }
+        .switch::after {
+            content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+            border-radius: 50%; background: var(--text); transition: transform .15s var(--ease);
+        }
+        .switch:checked { background: var(--accent); }
+        .switch:checked::after { transform: translateX(16px); }
+
         /* ═══ DROP OVERLAY (desktop) ═══ */
         #dropOverlay {
             position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: center;
@@ -351,6 +364,14 @@
                 <p class="param-hint">Nudges the automatic threshold. Positive keeps more ink — bolder, but
                    noisier; negative cleans harder at the risk of thinning strokes.</p>
             </div>
+            <div class="param-row">
+                <label for="swSpecks">Specks</label>
+                <input type="checkbox" id="swSpecks" class="switch" role="switch" checked
+                       title="Remove isolated specks of noise.">
+                <span id="valSpecks" class="param-val">On</span>
+                <p class="param-hint">Removes tiny isolated dots — the grain of a dark or noisy photo. Turn it
+                   off for music, dotted scripts or very fine punctuation.</p>
+            </div>
         </div>
     </div>
 </div>
@@ -383,6 +404,7 @@
      'btnNew', 'btnRotate', 'btnTune', 'btnShare', 'btnSave',
      'modeRow', 'sheet', 'sheetBackdrop', 'sheetPanel', 'btnReset',
      'slSize', 'slWeight', 'slThr', 'valSize', 'valWeight', 'valThr', 'btnHints',
+     'swSpecks', 'valSpecks',
      'dropOverlay', 'fileCamera', 'fileGallery'].forEach(id => el[id] = $(id));
 
     const SLIDERS = [['slSize', 'valSize'], ['slWeight', 'valWeight'], ['slThr', 'valThr']];
@@ -504,6 +526,7 @@
                 size: sliderValue('slSize'),
                 weight: sliderValue('slWeight'),
                 thr: sliderValue('slThr'),
+                specks: el.swSpecks.checked,
                 hints: el.sheet.classList.contains('hints'),
             }));
         } catch { /* private mode */ }
@@ -513,6 +536,7 @@
         try {
             const p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
             if (MODES.includes(p.mode)) setMode(p.mode, false);
+            if (p.specks === false) setSpecks(false);
             if (p.hints) {
                 el.sheet.classList.add('hints');
                 el.btnHints.setAttribute('aria-pressed', 'true');
@@ -639,6 +663,7 @@
             size: size === AUTO ? null : size,
             weight: sliderValue('slWeight'),
             thresholdOffset: sliderValue('slThr'),
+            despeckle: el.swSpecks.checked ? null : 0,      // null: automatic area
             upsample: allowUpsample,
         };
         const t0 = performance.now();
@@ -688,7 +713,7 @@
         const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
         const up = res.width !== srcImage.width ? ` → ${res.width}×${res.height}` : '';
         const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
-        const wt = i.weight !== 90 ? ` · w ${i.weight}` : '';
+        const wt = (i.weight !== 90 ? ` · w ${i.weight}` : '') + (i.despeckle === 0 ? ' · specks kept' : '');
         clearTimeout(badgeTimer);
         const sz = i.autoSize ? `size ${i.size} (auto)` : `size ${i.size}`;
         lastBadge = `${srcImage.width}×${srcImage.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
@@ -920,8 +945,19 @@
     });
     el.sheetBackdrop.addEventListener('click', () => showSheet(false));
 
+    function setSpecks(on) {
+        el.swSpecks.checked = on;
+        el.valSpecks.textContent = on ? 'On' : 'Off';
+    }
+    el.swSpecks.addEventListener('change', () => {
+        setSpecks(el.swSpecks.checked);
+        savePrefs();
+        run();
+    });
+
     el.btnReset.addEventListener('click', () => {
-        let changed = false;
+        let changed = !el.swSpecks.checked;
+        setSpecks(true);
         for (const [s, v] of SLIDERS) {
             const before = el[s].value;
             setSliderValue(s, DEFAULTS[s]);

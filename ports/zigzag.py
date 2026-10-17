@@ -10,7 +10,8 @@ Non-Uniformly Illuminated Document Image Binarization"
 Two-pass local mean filtering: Pass A classifies likely background pixels
 against the weighted local mean; Pass B normalizes each pixel against the
 local mean of background-only pixels, equalizing illumination before a
-single global Otsu threshold.
+single global Otsu threshold; ink specks below an area that scales with the
+window are then removed (despeckle).
 
 Backends (auto-detected): CuPy (NVIDIA GPU, optional `pip install cupy-cuda12x`)
 or OpenCV (CPU, SIMD box filters). Exact integer sums in float64 — outputs are
@@ -19,9 +20,10 @@ identical across backends and across the Java/JS ports.
 Copyright (c) Jean-Luc Bloechle - AGPL v3
 
 CLI:
-  python zigzag.py photo.jpg                     # binary, automatic size, weight 90
+  python zigzag.py photo.jpg                     # binary, automatic size and despeckle
   python zigzag.py -m color photo.jpg            # color foreground
-  python zigzag.py -s 30 photo.jpg               # fixed window (the 1.0 default)
+  python zigzag.py -d 0 score.png                # keep every speck (music, dotted scripts)
+  python zigzag.py -s 30 -d 0 photo.jpg          # the 1.0 defaults
 """
 
 import argparse
@@ -42,7 +44,7 @@ except Exception:
     cp = None
     HAS_GPU = False
 
-__version__ = '1.1.0'
+__version__ = '1.2.0'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
 
@@ -52,6 +54,14 @@ def auto_size(w, h):
     to [20, 250]. sqrt (correctly rounded, unlike hypot) and an explicit
     floor(x + 0.5) keep the three ports in agreement on every input."""
     return min(250, max(20, math.floor(math.sqrt(w * w + h * h) / 45 + 0.5)))
+
+
+def auto_despeckle(size):
+    """Automatic despeckle area: ink specks smaller than round(size² / 225)
+    pixels are removed (an area, so it scales as the square of the window:
+    2 px at size 20, 4 at 30, 26 at 77). Integer arithmetic, identical in
+    every port."""
+    return (2 * size * size + 225) // 450
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -115,29 +125,52 @@ def otsu(hist):
     return min(OTSU_CAP, thr)
 
 
-def upsample2x(src, xp=np):
-    """Center-aligned 2x bilinear upsampling (vertical then horizontal pass)."""
-    h, w = src.shape
-    s = (xp.arange(2 * w) + 0.5) * 0.5 - 0.5
-    x0 = xp.floor(s).astype(int)
-    fx = s - x0
-    xa, xb = xp.clip(x0, 0, w - 1), xp.clip(x0 + 1, 0, w - 1)
-    s = (xp.arange(2 * h) + 0.5) * 0.5 - 0.5
-    y0 = xp.floor(s).astype(int)
-    fy = (s - y0)[:, None]
-    ya, yb = xp.clip(y0, 0, h - 1), xp.clip(y0 + 1, 0, h - 1)
-    rows = src[ya] * (1 - fy) + src[yb] * fy          # vertical pass (2h, w)
-    return rows[:, xa] * (1 - fx) + rows[:, xb] * fx  # horizontal pass (2h, 2w)
+def _neighbor(a, axis, step, xp=np):
+    """a shifted by one pixel along axis, edge-clamped: step -1 gives the
+    previous row/column, +1 the next."""
+    if axis == 0:
+        return xp.concatenate([a[:1], a[:-1]] if step < 0 else [a[1:], a[-1:]], axis=0)
+    return xp.concatenate([a[:, :1], a[:, :-1]] if step < 0 else [a[:, 1:], a[:, -1:]], axis=1)
+
+
+def upsample_phases(src, xp=np):
+    """Center-aligned 2x bilinear upsampling, returned as its four phases.
+
+    At exactly 2x every output sample sits at -0.25 / +0.25 of a source pixel,
+    so the weights are the constants 0.25 / 0.75. Output pixel (2y+i, 2x+j) is
+    phase [i][j][y, x]: tl (0,0), tr (0,1), bl (1,0), br (1,1). Each phase is
+    source-sized, so the 2x image is never held in float64. The products are
+    those of the general form a*(1-f) + b*f, vertical pass first, in the same
+    order as the Java and JS ports — bit-identical.
+    """
+    a = _neighbor(src, 0, -1, xp) * 0.25 + src * 0.75     # rows 2y   (sy = y - 0.25)
+    b = src * 0.75 + _neighbor(src, 0, 1, xp) * 0.25      # rows 2y+1 (sy = y + 0.25)
+    tl = _neighbor(a, 1, -1, xp) * 0.25 + a * 0.75
+    tr = a * 0.75 + _neighbor(a, 1, 1, xp) * 0.25
+    bl = _neighbor(b, 1, -1, xp) * 0.25 + b * 0.75
+    br = b * 0.75 + _neighbor(b, 1, 1, xp) * 0.25
+    return tl, tr, bl, br
+
+
+def despeckle_mask(ink, min_area):
+    """Pixels of 8-connected ink components smaller than min_area (bool array).
+    ink: HxW bool, host (NumPy) array — labelled by OpenCV even for the GPU backend."""
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    small = stats[:, cv2.CC_STAT_AREA] < min_area
+    small[0] = False                                  # label 0 is the paper
+    return small[labels]
 
 
 # ── core pipeline (Algorithm 1 of the paper) ─────────────────────────────────
 
 def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=None,
-            threshold_offset=0):
+            threshold_offset=0, despeckle=None):
     """
     rgb: HxWx3 uint8 (RGB). Returns (output_uint8, info_dict).
     size: window in px, or None / 'auto' (default) for auto_size(width, height)
     threshold_offset: manual shift of the auto Otsu threshold (0 = auto)
+    despeckle: smallest ink component kept, in source pixels; None / 'auto'
+      (default) for auto_despeckle(size), 0 to keep everything
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
@@ -153,6 +186,11 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     if not weight > 0:
         raise ValueError(f"invalid weight: {weight!r} (expected > 0)")
     size = int(size)
+    if despeckle is None or despeckle == 'auto':
+        despeckle = auto_despeckle(size)
+    if int(despeckle) != despeckle or despeckle < 0:
+        raise ValueError(f"invalid despeckle: {despeckle!r} (expected an integer >= 0)")
+    despeckle = int(despeckle)
     if backend is None or backend == 'auto':
         backend = 'gpu' if HAS_GPU else 'cpu'
     if backend == 'gpu' and not HAS_GPU:
@@ -193,14 +231,22 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     otsu_thr = otsu(cp.asnumpy(hist) if gpu else hist)
     thr = min(255, max(0, otsu_thr + threshold_offset))
     info = {'size': size, 'auto_size': auto, 'weight': weight, 'otsu': otsu_thr,
-            'threshold': thr, 'backend': backend}
+            'threshold': thr, 'despeckle': despeckle, 'backend': backend}
+
+    # Despeckle: ink components smaller than the area become paper. Done on the
+    # 1x foreground, before any output: a removed speck's neighbours are all
+    # paper, so every 2x sample around it is paper too, in every mode.
+    if despeckle > 1:
+        specks = despeckle_mask(host(fg < thr), despeckle)
+        fg[xp.asarray(specks) if gpu else specks] = 255.0
 
     if mode in ('gray', 'color'):
         # antialiased background cleanup: threshold the 2x-upsampled foreground,
         # then average each 2x2 block back to 1x (coverage in {0, .25, .5, .75, 1})
         # and blend toward white — free antialiasing at the cutoff, sharp text
-        m = (upsample2x(fg, xp) >= thr).astype(xp.float64)
-        cov = (m[0::2, 0::2] + m[0::2, 1::2] + m[1::2, 0::2] + m[1::2, 1::2]) * 0.25
+        tl, tr, bl, br = upsample_phases(fg, xp)
+        cov = ((tl >= thr).astype(xp.float64) + (tr >= thr) + (bl >= thr) + (br >= thr)) * 0.25
+        del tl, tr, bl, br
 
         if mode == 'gray':
             out = cov * 255.0 + (1.0 - cov) * fg
@@ -212,32 +258,30 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
         return host(xp.clip(out, 0, 255).astype(xp.uint8)), info
 
     # binary — threshold, 2x upsample by default for detail preservation
-    src = upsample2x(fg, xp) if upsample else fg
-    return host(xp.where(src >= thr, 255, 0).astype(xp.uint8)), info
+    if not upsample:
+        return host(xp.where(fg >= thr, 255, 0).astype(xp.uint8)), info
+    out = xp.empty((2 * h, 2 * w), dtype=xp.uint8)
+    for (i, j), phase in zip(((0, 0), (0, 1), (1, 0), (1, 1)), upsample_phases(fg, xp)):
+        out[i::2, j::2] = xp.where(phase >= thr, 255, 0)
+    return host(out), info
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
-def _size_arg(v):
-    if v == "auto":
-        return None
-    try:
-        n = int(v)
-    except ValueError:
-        n = 0
-    if n < 2:
-        raise argparse.ArgumentTypeError(f"expected an integer >= 2 or 'auto', got {v!r}")
-    return n
-
-
-def _weight_arg(v):
-    try:
-        n = int(v)
-    except ValueError:
-        n = 0
-    if n <= 0:
-        raise argparse.ArgumentTypeError(f"expected a positive integer, got {v!r}")
-    return n
+def _int_arg(minimum, auto=False):
+    """argparse type: an integer >= minimum, or 'auto' (-> None) when allowed."""
+    def parse(v):
+        if auto and v == "auto":
+            return None
+        try:
+            n = int(v)
+        except ValueError:
+            n = None
+        if n is None or n < minimum:
+            alt = " or 'auto'" if auto else ""
+            raise argparse.ArgumentTypeError(f"expected an integer >= {minimum}{alt}, got {v!r}")
+        return n
+    return parse
 
 
 def main():
@@ -246,13 +290,16 @@ def main():
     parser.add_argument("images", nargs="+", help="input image file(s)")
     parser.add_argument("-m", "--mode", choices=MODES,
                         default="binary", help="output mode (default: binary)")
-    parser.add_argument("-s", "--size", type=_size_arg, default=None,
+    parser.add_argument("-s", "--size", type=_int_arg(2, auto=True), default=None,
                         help="window size in px, or 'auto' (default: auto, "
                              "from the image diagonal; 30 was the 1.0 default)")
-    parser.add_argument("-w", "--weight", type=_weight_arg, default=90,
+    parser.add_argument("-w", "--weight", type=_int_arg(1), default=90,
                         help="mean weight in percent, 85-90 suits most pages (default: 90)")
     parser.add_argument("-T", "--threshold-offset", type=int, default=0,
                         help="manual shift of the auto Otsu threshold (default: 0 = auto)")
+    parser.add_argument("-d", "--despeckle", type=_int_arg(0, auto=True), default=None,
+                        help="remove ink specks smaller than N source pixels, 0 to keep "
+                             "them (default: auto, from the window size)")
     parser.add_argument("-b", "--backend", choices=["auto", "gpu", "cpu"],
                         default="auto", help="processing backend (default: auto)")
     parser.add_argument("-o", "--output",
@@ -313,7 +360,8 @@ def main():
         out, info = process(rgb, mode=args.mode, size=args.size,
                             weight=args.weight, upsample=not args.no_upsample,
                             backend=args.backend,
-                            threshold_offset=args.threshold_offset)
+                            threshold_offset=args.threshold_offset,
+                            despeckle=args.despeckle)
         t_proc = (time.perf_counter() - t0) * 1000
 
         if out_dir:
@@ -334,7 +382,7 @@ def main():
         count += 1
         oh, ow = out.shape[:2]
         rows.append([path, dst, args.mode, info['size'], info['weight'],
-                     info['otsu'], info['threshold'], info['backend'],
+                     info['otsu'], info['threshold'], info['despeckle'], info['backend'],
                      rgb.shape[1], rgb.shape[0], ow, oh,
                      round(t_load, 1), round(t_proc, 1), round(t_save, 1)])
         otsu_s = (f"thr={info['threshold']} (otsu={info['otsu']}) · "
@@ -343,13 +391,13 @@ def main():
                   if args.time else f"{t_proc:.0f} ms")
         size_s = f"{info['size']} (auto)" if info['auto_size'] else str(info['size'])
         print(f"{path} → {dst}  [size={size_s} weight={info['weight']} "
-              f"· {otsu_s}{info['backend']} · {timing}]")
+              f"despeckle={info['despeckle']} · {otsu_s}{info['backend']} · {timing}]")
 
     if args.csv and rows:
         with open(args.csv, "w", newline="") as f:
             w = csv.writer(f, lineterminator="\n")
             w.writerow(["input", "output", "mode", "size", "weight", "otsu", "threshold",
-                        "backend",
+                        "despeckle", "backend",
                         "in_width", "in_height", "out_width", "out_height",
                         "load_ms", "proc_ms", "save_ms"])
             w.writerows(rows)

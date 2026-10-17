@@ -9,7 +9,8 @@
  * Two-pass local mean filtering: Pass A classifies likely background pixels
  * against the weighted local mean; Pass B normalizes each pixel against the
  * local mean of background-only pixels, equalizing illumination before a
- * single global Otsu threshold.
+ * single global Otsu threshold; ink specks below an area that scales with the
+ * window are then removed (despeckle).
  *
  * Dependency-free ES module, separable rolling sums (O(n)), float64.
  *
@@ -20,11 +21,17 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
+// Opaque white / black as one 32-bit word each, built from bytes so the
+// value is right whatever the platform's endianness.
+const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
+const BLACK = new Uint32Array(new Uint8ClampedArray([0, 0, 0, 255]).buffer)[0];
 const OTSU_CAP = 250;
 const MODES = ['binary', 'gray', 'color'];
-/** size: null = automatic, from the image diagonal (see autoSize). */
-const DEFAULTS = Object.freeze({ mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0 });
+/** size and despeckle: null (or 'auto') = the automatic rules below. */
+const DEFAULTS = Object.freeze({
+    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: null,
+});
 
 /**
  * Automatic window size: one window per 45 px of image diagonal, clamped to
@@ -37,11 +44,19 @@ function autoSize(w, h) {
     return Math.min(250, Math.max(20, Math.floor(Math.sqrt(w * w + h * h) / 45 + 0.5)));
 }
 
+/**
+ * Automatic despeckle area: ink specks smaller than round(size^2 / 225) pixels
+ * are removed (an area, so it scales as the square of the window: 2 px at
+ * size 20, 4 at 30, 26 at 77). Integer arithmetic, identical in every port.
+ */
+function autoDespeckle(size) {
+    return Math.floor((2 * size * size + 225) / 450);
+}
+
 /** Resolve and validate options; throws on values the pipeline cannot honour. */
 function resolveOptions(opts, w, h) {
     const o = { ...DEFAULTS };
-    for (const k of Object.keys(DEFAULTS)) if (opts[k] != null) o[k] = opts[k];
-    if (opts.size === 'auto') o.size = null;
+    for (const k of Object.keys(DEFAULTS)) if (opts[k] != null && opts[k] !== 'auto') o[k] = opts[k];
     if (!MODES.includes(o.mode)) {
         throw new Error(`invalid mode: ${o.mode} (expected binary, gray or color)`);
     }
@@ -49,14 +64,58 @@ function resolveOptions(opts, w, h) {
     if (auto) o.size = autoSize(w, h);
     if (!Number.isInteger(o.size) || o.size < 2) throw new RangeError(`invalid size: ${o.size} (expected an integer >= 2)`);
     if (!(o.weight > 0)) throw new RangeError(`invalid weight: ${o.weight} (expected > 0)`);
+    if (o.despeckle == null) o.despeckle = autoDespeckle(o.size);
+    if (!Number.isInteger(o.despeckle) || o.despeckle < 0) {
+        throw new RangeError(`invalid despeckle: ${o.despeckle} (expected an integer >= 0)`);
+    }
     return { ...o, auto };
+}
+
+/**
+ * Turn 8-connected ink components (fg < thr) smaller than minArea into paper
+ * (255), in place. One raster scan with union-find; a root holds its
+ * component's size as a negative number, so one int per pixel suffices.
+ * Works on any numeric array (the CPU's Float64Array, the GPU's Float32Array).
+ */
+function despeckle(fg, w, h, thr, minArea) {
+    const parent = new Int32Array(w * h);
+    const find = i => {
+        while (parent[i] >= 0) {
+            const p = parent[i];
+            if (parent[p] >= 0) parent[i] = parent[p];   // path halving
+            i = p;
+        }
+        return i;
+    };
+    const union = (a, b) => {
+        let ra = find(a), rb = find(b);
+        if (ra === rb) return;
+        if (parent[ra] > parent[rb]) [ra, rb] = [rb, ra];   // ra = larger
+        parent[ra] += parent[rb];
+        parent[rb] = ra;
+    };
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            if (fg[i] >= thr) continue;
+            parent[i] = -1;
+            if (x > 0 && fg[i - 1] < thr) union(i, i - 1);
+            if (y > 0) {
+                const up = i - w;
+                if (x > 0 && fg[up - 1] < thr) union(i, up - 1);
+                if (fg[up] < thr) union(i, up);
+                if (x < w - 1 && fg[up + 1] < thr) union(i, up + 1);
+            }
+        }
+    }
+    for (let i = 0; i < w * h; i++) {
+        if (fg[i] < thr && -parent[find(i)] < minArea) fg[i] = 255;
+    }
 }
 
 class ZigZag {
 
     // ── helpers ──────────────────────────────────────────────────────────────
-
-    static autoSize(w, h) { return autoSize(w, h); }
 
     /** Rec. 601 luma, round-half-up. RGBA bytes → Float64Array. */
     static grayImage(rgba, w, h) {
@@ -68,18 +127,32 @@ class ZigZag {
         return gray;
     }
 
-    /** Horizontal rolling sum over [x-r..x+r], zero-padded (truncated window). */
+    /** Horizontal rolling sum over [x-r..x+r], zero-padded (truncated window).
+     *  The x loop is split where the window enters and leaves the row, so the
+     *  inner loops carry no bounds tests; each x still adds, then removes, in
+     *  the same order as the single-loop form. */
     static #hsum(src, dst, w, h, r) {
+        const initR = Math.min(r, w - 1);
+        const addEnd = Math.max(1, w - r);      // x < addEnd  <=>  x + r < w
+        const remBeg = r + 1;                   // x >= remBeg <=>  x - r - 1 >= 0
         for (let y = 0; y < h; y++) {
             const base = y * w;
             let sum = 0;
-            const initR = Math.min(r, w - 1);
             for (let x = 0; x <= initR; x++) sum += src[base + x];
             dst[base] = sum;
-            for (let x = 1; x < w; x++) {
-                const add = x + r, rem = x - r - 1;
-                if (add < w) sum += src[base + add];
-                if (rem >= 0) sum -= src[base + rem];
+            let x = 1;
+            for (const end = Math.min(addEnd, remBeg); x < end; x++) {       // add only
+                sum += src[base + x + r];
+                dst[base + x] = sum;
+            }
+            for (; x < addEnd; x++) {                                        // add and remove
+                sum += src[base + x + r];
+                sum -= src[base + x - r - 1];
+                dst[base + x] = sum;
+            }
+            for (; x < remBeg && x < w; x++) dst[base + x] = sum;            // neither
+            for (; x < w; x++) {                                             // remove only
+                sum -= src[base + x - r - 1];
                 dst[base + x] = sum;
             }
         }
@@ -152,36 +225,30 @@ class ZigZag {
         return Math.min(OTSU_CAP, thr);
     }
 
-    /** Center-aligned 2x bilinear upsampling fused with thresholding:
-     *  vertical interpolation pass, then the horizontal pass writes the
-     *  binary RGBA pixels directly (no full-resolution float buffer). */
+    /** Center-aligned 2x bilinear upsampling fused with thresholding. At
+     *  exactly 2x every output sample sits at -0.25 / +0.25 of a source pixel,
+     *  so each source row yields two output rows from constant 0.25 / 0.75
+     *  weights — the same samples as #coverage, written as pixels instead of
+     *  being counted. Pixels are stored as 32-bit words. */
     static #upsampleBinarize(src, w, h, thr) {
-        const W = w * 2, H = h * 2;
-        const rows = new Float64Array(H * w);
-        for (let y2 = 0; y2 < H; y2++) {
-            const sy = (y2 + 0.5) * 0.5 - 0.5;
-            const y0 = Math.floor(sy);
-            const fy = sy - y0;
-            const ya = Math.min(h - 1, Math.max(0, y0)) * w;
-            const yb = Math.min(h - 1, Math.max(0, y0 + 1)) * w;
-            const base = y2 * w;
+        const W = w * 2;
+        const out = new Uint8ClampedArray(W * h * 2 * 4);
+        const px = new Uint32Array(out.buffer);
+        const rowA = new Float64Array(w);   // y2 = 2y   (sy = y - 0.25)
+        const rowB = new Float64Array(w);   // y2 = 2y+1 (sy = y + 0.25)
+        for (let y = 0; y < h; y++) {
+            const ya = Math.max(0, y - 1) * w, yc = y * w, yb = Math.min(h - 1, y + 1) * w;
             for (let x = 0; x < w; x++) {
-                rows[base + x] = src[ya + x] * (1 - fy) + src[yb + x] * fy;
+                rowA[x] = src[ya + x] * 0.25 + src[yc + x] * 0.75;
+                rowB[x] = src[yc + x] * 0.75 + src[yb + x] * 0.25;
             }
-        }
-        const out = new Uint8ClampedArray(H * W * 4);
-        for (let y2 = 0; y2 < H; y2++) {
-            const base = y2 * w;
-            let o = y2 * W * 4;
-            for (let x2 = 0; x2 < W; x2++, o += 4) {
-                const sx = (x2 + 0.5) * 0.5 - 0.5;
-                const x0 = Math.floor(sx);
-                const fx = sx - x0;
-                const xa = Math.min(w - 1, Math.max(0, x0));
-                const xb = Math.min(w - 1, Math.max(0, x0 + 1));
-                const v = (rows[base + xa] * (1 - fx) + rows[base + xb] * fx) >= thr ? 255 : 0;
-                out[o] = out[o + 1] = out[o + 2] = v;
-                out[o + 3] = 255;
+            const oa = 2 * y * W, ob = oa + W;
+            for (let x = 0; x < w; x++) {
+                const xa = Math.max(0, x - 1), xb = Math.min(w - 1, x + 1);
+                px[oa + 2 * x]     = (rowA[xa] * 0.25 + rowA[x] * 0.75) >= thr ? WHITE : BLACK;
+                px[oa + 2 * x + 1] = (rowA[x] * 0.75 + rowA[xb] * 0.25) >= thr ? WHITE : BLACK;
+                px[ob + 2 * x]     = (rowB[xa] * 0.25 + rowB[x] * 0.75) >= thr ? WHITE : BLACK;
+                px[ob + 2 * x + 1] = (rowB[x] * 0.75 + rowB[xb] * 0.25) >= thr ? WHITE : BLACK;
             }
         }
         return out;
@@ -218,14 +285,15 @@ class ZigZag {
     /**
      * imageData: { data: RGBA bytes, width, height }
      * opts: { mode: 'binary'|'gray'|'color', size, weight, upsample,
-     *         thresholdOffset }  — size null/'auto' (default) = from the image
-     *         diagonal; offset shifts the auto Otsu threshold (0 = auto)
+     *         thresholdOffset, despeckle }  — size and despeckle null/'auto'
+     *         (default) = automatic; offset shifts the auto Otsu threshold;
+     *         despeckle 0 keeps every ink speck
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {
         const { width: w, height: h } = imageData;
         const rgba = imageData.data;
-        const { mode, size, weight, upsample, thresholdOffset: offset, auto } =
+        const { mode, size, weight, upsample, thresholdOffset: offset, despeckle: minArea, auto } =
             resolveOptions(opts, w, h);
 
         const r = Math.floor(size / 2);
@@ -273,7 +341,12 @@ class ZigZag {
         // optionally shifted by the manual offset
         const otsu = ZigZag.otsu(ZigZag.histogram(fg, w, h, 10));
         const thr = Math.min(255, Math.max(0, otsu + offset));
-        const info = { size, autoSize: auto, weight, otsu, threshold: thr };
+        const info = { size, autoSize: auto, weight, otsu, threshold: thr, despeckle: minArea };
+
+        // Despeckle: ink components smaller than the area become paper. Done on
+        // the 1x foreground, before any output: a removed speck's neighbours are
+        // all paper, so every 2x sample around it is paper too, in every mode.
+        if (minArea > 1) despeckle(fg, w, h, thr, minArea);
 
         if (mode === 'gray' || mode === 'color') {
             // antialiased background cleanup: blend toward white with the 2x2
@@ -310,13 +383,10 @@ class ZigZag {
             return { data: out, width: w * 2, height: h * 2, info };
         }
         const out = new Uint8ClampedArray(n * 4);
-        for (let i = 0; i < n; i++) {
-            const v = fg[i] >= thr ? 255 : 0;
-            out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = v;
-            out[i * 4 + 3] = 255;
-        }
+        const px = new Uint32Array(out.buffer);
+        for (let i = 0; i < n; i++) px[i] = fg[i] >= thr ? WHITE : BLACK;
         return { data: out, width: w, height: h, info };
     }
 }
 
-export { ZigZag, MODES, DEFAULTS, VERSION, autoSize, resolveOptions };
+export { ZigZag, MODES, DEFAULTS, VERSION, autoSize, autoDespeckle, despeckle, resolveOptions };

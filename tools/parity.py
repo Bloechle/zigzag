@@ -40,9 +40,10 @@ JAVA = os.path.join(ROOT, "ports", "ZigZag.java")
 JS = os.path.join(ROOT, "js", "zigzag.js")
 
 MODES = ["binary", "gray", "color"]
-# (size, weight, threshold offset, 2x upsample) — size "auto" is the default rule
-PARAMS = [("auto", 90, 0, True), (30, 90, 0, True), (45, 60, -15, True),
-          (12, 100, 25, True), (100, 75, 0, True), (30, 90, 0, False)]
+# (size, weight, threshold offset, 2x upsample, despeckle) — "auto" is the
+# default rule; (30, 90, 0, True, 0) is the 1.0 default output
+PARAMS = [("auto", 90, 0, True, "auto"), (30, 90, 0, True, 0), (45, 60, -15, True, "auto"),
+          (12, 100, 25, True, "auto"), (100, 75, 0, True, 50), (30, 90, 0, False, "auto")]
 
 
 # ── test corpus ──────────────────────────────────────────────────────────────
@@ -84,6 +85,20 @@ def corpus(d):
     put("row", np.arange(60, dtype=np.uint8).reshape(1, 60))  # window wider than image
     put("column", np.arange(60, dtype=np.uint8).reshape(60, 1))
     put("flat", np.full((40, 40), 128, np.uint8))
+    # specks of 1 to 60 px (diagonal pairs, blobs, some on the borders) on the
+    # lit page: component areas straddle every despeckle threshold used below
+    sp = gray.copy()
+    for k in range(400):
+        y, x = int(rng.integers(0, h)), int(rng.integers(0, w))
+        if k % 50 == 0:
+            y = 0 if k % 100 == 0 else h - 2               # touch the borders
+        if k % 4 == 0:                                     # diagonal pair: one 8-component
+            sp[y, x] = 20
+            sp[min(y + 1, h - 1), min(x + 1, w - 1)] = 20
+        else:
+            bh, bw = int(rng.integers(1, 7)), int(rng.integers(1, 11))
+            sp[y:y + bh, x:x + bw] = 25
+    put("specks_png", sp)
     # A4 proportions, large enough that the automatic size is not clamped (35)
     put("a4_jpg", cv2.resize(bgr, (900, 1273), interpolation=cv2.INTER_LINEAR), "jpg",
         [cv2.IMWRITE_JPEG_QUALITY, 92])
@@ -92,10 +107,10 @@ def corpus(d):
 
 # ── runners: each returns a HxW or HxWx3 uint8 array in RGB order ────────────
 
-def run_python(src, mode, size, weight, off, up, d):
+def run_python(src, mode, size, weight, off, up, ds, d):
     dst = os.path.join(d, "py.png")
     subprocess.run([sys.executable, PY, src, "-m", mode, "-s", str(size),
-                    "-w", str(weight), "-T", str(off), "-o", dst]
+                    "-w", str(weight), "-T", str(off), "-d", str(ds), "-o", dst]
                    + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
     return read(dst)
@@ -104,10 +119,10 @@ def run_python(src, mode, size, weight, off, up, d):
 JAVA_CP = None   # compiled once by main(); `java ZigZag.java` recompiles every call
 
 
-def run_java(src, mode, size, weight, off, up, d):
+def run_java(src, mode, size, weight, off, up, ds, d):
     dst = os.path.join(d, "java.png")
     subprocess.run(["java", "-cp", JAVA_CP, "ZigZag", src, f"--mode={mode}", f"--size={size}",
-                    f"--weight={weight}", f"--threshold-offset={off}",
+                    f"--weight={weight}", f"--threshold-offset={off}", f"--despeckle={ds}",
                     f"--output={dst}"] + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
     return read(dst)
@@ -127,7 +142,7 @@ fs.writeFileSync(process.argv[4], Buffer.concat([
 """
 
 
-def run_js(src, mode, size, weight, off, up, d):
+def run_js(src, mode, size, weight, off, up, ds, d):
     raw = os.path.join(d, "in.rgba")
     if not os.path.exists(raw):
         bgr = cv2.imread(src, cv2.IMREAD_COLOR)
@@ -140,7 +155,7 @@ def run_js(src, mode, size, weight, off, up, d):
         f.write(JS_DRIVER % JS.replace("\\", "/"))
     dst = os.path.join(d, "js.raw")
     opts = json.dumps({"mode": mode, "size": size, "weight": weight,
-                       "thresholdOffset": off, "upsample": up})
+                       "thresholdOffset": off, "upsample": up, "despeckle": ds})
     subprocess.run(["node", drv, raw, opts, dst], check=True, capture_output=True)
     blob = open(dst, "rb").read()
     w, h = np.frombuffer(blob[:8], np.int32)
@@ -259,11 +274,11 @@ def main():
         os.makedirs(sub, exist_ok=True)
         worst = []
         for mode in MODES:
-            for size, weight, off, up in PARAMS:
-                tag = f"{other_tag(mode, size, weight, off, up)}"
-                a = runners[ref](src, mode, size, weight, off, up, sub)
+            for size, weight, off, up, ds in PARAMS:
+                tag = other_tag(mode, size, weight, off, up, ds)
+                a = runners[ref](src, mode, size, weight, off, up, ds, sub)
                 for other in others:
-                    b = runners[other](src, mode, size, weight, off, up, sub)
+                    b = runners[other](src, mode, size, weight, off, up, ds, sub)
                     checks += 1
                     if a.shape != b.shape:
                         worst.append(f"{other} {tag}: shape {a.shape} vs {b.shape}")
@@ -286,8 +301,8 @@ def main():
     return 1 if fails else 0
 
 
-def other_tag(mode, size, weight, off, up):
-    return f"{mode} {size}/{weight}/{off}{'' if up else ' 1x'}"
+def other_tag(mode, size, weight, off, up, ds):
+    return f"{mode} {size}/{weight}/{off} despeckle {ds}{'' if up else ' 1x'}"
 
 
 if __name__ == "__main__":
