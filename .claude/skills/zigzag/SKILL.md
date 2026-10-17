@@ -1,6 +1,6 @@
 ---
 name: zigzag
-description: "Develop Jean-Luc Bloechle's ZigZag repository (Bloechle/zigzag, public, AGPL): the document binarization algorithm of DocEng 2024 in three bit-identical ports (ports/zigzag.py, ports/ZigZag.java on JDK 25 + Vector API, js/zigzag.js), the WebGPU accelerator (js/zigzag-gpu.js), the PWA web app (index.html, sw.js) published by GitHub Pages, and its two gates (tools/parity.py, tools/app_check.py). Use it for any change to a port, the app, the gates, the defaults (automatic size, despeckle, weight), a release or the docs of this repo. Benchmarking ZigZag against other methods (binbench, db50, DocEng/ICDAR competitions) is NOT here: it lives in the account skill of the same name, which is private."
+description: "Develop Jean-Luc Bloechle's ZigZag repository (Bloechle/zigzag, public, AGPL): the document binarization algorithm of DocEng 2024 in three bit-identical ports (ports/zigzag.py, ports/ZigZag.java on JDK 25 + Vector API, js/zigzag.js), the WebGPU accelerator (js/zigzag-gpu.js), the PWA web app (index.html, sw.js) published by GitHub Pages, and its two gates (tools/parity.py, tools/app_check.py). Use it for any change to a port, the app, the gates, the defaults (automatic size, despeckle, weight), a release or the docs of this repo. Benchmarking ZigZag against other methods (binbench, db50, the sweeps behind the defaults, DocEng/ICDAR competitions) is NOT here: it lives in the private repository Bloechle/UniFR (skill zigzag-eval)."
 ---
 
 # ZigZag — working on the repository
@@ -8,9 +8,15 @@ description: "Develop Jean-Luc Bloechle's ZigZag repository (Bloechle/zigzag, pu
 Read `AGENTS.md` first (map, rules, gates). This skill carries what the card does not:
 how the ports stay identical, the defaults and why, the pitfalls already paid for,
 and the release procedure. It lives in the repo and is updated by commit, in the same
-commit as the change it records; the account skill `zigzag` points here and keeps the
-private evaluation tooling (binbench, the db50 results, competition notes), which a
-public repository must not carry.
+commit as the change it records. The evaluation (binbench, the db50 results, the sweeps
+behind each default, competition notes) lives in the private repository `Bloechle/UniFR`
+(`zigzag/`, skill `zigzag-eval`).
+
+**What is public**: what anyone can check from this repository alone — the algorithm, the
+defaults and their rules, a one-line reason for each, speed, parity. **What is not**:
+anything that compares ZigZag with other methods or rests on our own test pages (scores,
+sweeps, the measured gain of a default, rankings, competition remarks). Moving a fact
+across that line is Jean-Luc's decision, never a side effect of a commit.
 
 ## The pipeline, in the order the code runs it
 
@@ -30,22 +36,21 @@ three modes and both resolutions.
 
 ## Defaults and why
 
-- **size: automatic**, `clamp(floor(sqrt(w² + h²) / 45 + 0.5), 20, 250)`. Measured on
-  synthetic pages at three resolutions: every fixed size loses somewhere (30 at high
-  resolution, 80 at low), the rule loses nowhere. It is insurance, not a gain. A
-  content-based size (from the stroke width) was measured and rejected: the output would
-  depend on the content, and parity and reproducibility with it.
-- **weight: 90.** 85 and 90 tie at the top of the 60–100 sweep; 100 is clearly worse.
-  The old advice to lower it to ~60 for degraded documents was not supported by any
-  measurement and is gone — do not reintroduce it.
+- **size: automatic**, `clamp(floor(sqrt(w² + h²) / 45 + 0.5), 20, 250)`. A window in
+  pixels is right at one resolution only; the rule follows the image. A size computed
+  from the content (the stroke width) is ruled out: the output would depend on the
+  content, and parity and reproducibility with it.
+- **weight: 90.** 85–90 suits clean and degraded pages alike; 100 is too strict. The old
+  advice to lower it to ~60 for degraded documents is withdrawn — do not reintroduce it.
 - **despeckle: `round(size² / 225)`**, written `(2·size² + 225) div 450` in integers. An
   area, so it scales as the square of the window (2 px at size 20, 4 at 30, 12 at 52,
-  26 at 77). The largest measured gain of all: dark, noisy pages lose their
-  salt-and-pepper (normalising by a small background amplifies sensor noise, and the
-  global Otsu cannot tell it from faint ink). A fixed constant would eat i-dots and
-  punctuation at low resolution. `despeckle=0` turns it off (music, dotted scripts).
+  26 at 77): dark, noisy pages lose their salt-and-pepper (normalising by a small
+  background amplifies sensor noise, and the global Otsu cannot tell it from faint ink),
+  while a fixed constant would eat i-dots and punctuation at low resolution.
+  `despeckle=0` turns it off (music, dotted scripts).
 
-The evaluation behind these numbers is in the account skill (private).
+The measurements behind these choices are in `Bloechle/UniFR` (private); quote none of
+them here.
 
 ## How the ports stay identical
 
@@ -96,7 +101,11 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
   pass as "row y-1 plus the entering row minus the leaving row", per-column window
   counts. Its remaining time is the divisions of Pass A and Pass B.
 - Measured and rejected: computing the Pass B division only on pixels darker than their
-  background (53 % of a page are, no gain); a full 16 MB RGB→gray lookup table.
+  background (53 % of a page are, no gain); a full 16 MB RGB→gray lookup table; a
+  WebAssembly Pass B (about 1.5× the JS loop, and WASM SIMD has no float64 division to
+  gain on — not worth a fourth port).
+- The speed figures are measured with `zigzag/speed.py` of `Bloechle/UniFR` (best of six
+  runs per mode, the three ports of a clone of this repo).
 
 ## Pitfalls already paid for
 
@@ -144,8 +153,8 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
 3. Regenerate `examples/*_ZZ.png` with `python ports/zigzag.py examples/02_04.jpg
    examples/10_18.jpg -o examples/`.
 4. Touching the app: bump `CACHE` in `sw.js`; `python tools/app_check.py`.
-5. Push to `main` (this publishes the app). The account skill's evaluation tool keeps a
-   verbatim copy of `ports/zigzag.py`: re-copy it there, or it benchmarks an old version.
+5. Push to `main` (this publishes the app). The private benchmark loads the port from a
+   clone, so nothing needs copying; a default change is measured there before it ships.
 
 ## Where this stands (2026-10-17)
 

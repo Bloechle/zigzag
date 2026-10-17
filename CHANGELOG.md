@@ -15,7 +15,7 @@ Versions are shared by the three ports (Python, Java, JavaScript), which stay bi
 
 ## 1.2.0 — 2026-10-17
 
-**Default output changed.** A despeckle runs after thresholding: 8-connected ink components smaller than `round(size² / 225)` pixels become paper — 4 px at size 30, 26 at 77. It removes the salt-and-pepper grain of dark, noisy photos, ZigZag's main weakness, at no visible cost elsewhere. To reproduce 1.1 results exactly, turn it off (`-d 0`, `--despeckle=0`, `despeckle: 0`); 1.0 results need a fixed size of 30 as well.
+**Default output changed.** A despeckle runs after thresholding: 8-connected ink components smaller than `round(size² / 225)` pixels become paper — 4 px at size 30, 26 at 77. It removes the salt-and-pepper grain of dark, noisy photos at no visible cost elsewhere. To reproduce 1.1 results exactly, turn it off (`-d 0`, `--despeckle=0`, `despeckle: 0`); 1.0 results need a fixed size of 30 as well.
 
 - Python, Java, JS: `despeckle` option (`auto`, the default, or an area in source pixels, 0 to keep every speck), reported in the result info and the CSV. `auto_despeckle` / `ZigZag.autoDespeckle` / `autoDespeckle` expose the rule. Java: `ZigZag.AUTO` is now -1 and serves both `size` and `despeckle`.
 - WebGPU accelerator: the despeckle runs on the CPU with the CPU port's own function and is cached per threshold.

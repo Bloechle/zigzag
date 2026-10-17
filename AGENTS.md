@@ -34,7 +34,9 @@ ports identical, the pitfalls already paid for, and the release procedure.
   previous output, regenerate `examples/*_ZZ.png`.
 - **Every release that touches the app bumps `CACHE` in `sw.js`**, or installed copies
   keep the old version.
-- The repository is public: no benchmark data, competition notes or personal data here.
+- **The repository is public.** It states what anyone can check from it alone (algorithm,
+  defaults and their rules, speed, parity). Comparisons with other methods, scores, sweeps
+  and competition notes live in the private `Bloechle/UniFR` (`zigzag/`); no personal data.
 
 ## Gates
 
