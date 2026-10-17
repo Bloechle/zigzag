@@ -6,12 +6,17 @@ produce bit-identical output.
 The three ports share the same float64 arithmetic, so any divergence is a bug.
 This harness generates synthetic documents (non-uniform lighting, several pixel
 formats, degenerate sizes), runs every port over a matrix of parameters and
-compares the results pixel by pixel.
+compares the results pixel by pixel. It also checks that the automatic window
+size rule gives the same integer in all three ports over a large sample of
+image dimensions.
+
+The JS port is fed pixels decoded by OpenCV: in the browser the canvas does the
+decoding, so what is proven here for JS is the computation, not the decoder.
 
     python tools/parity.py              # all ports available on this machine
     python tools/parity.py --keep       # keep the working directory
 
-Requires numpy + opencv (always), java 11+ and node 18+ (optional — a missing
+Requires numpy + opencv (always), a JDK 11+ and node 18+ (optional — a missing
 runtime is reported as skipped, not as a failure).
 """
 
@@ -23,6 +28,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ports"))
+from zigzag import auto_size  # noqa: E402  (the reference rule)
+
 import cv2
 import numpy as np
 
@@ -32,7 +40,9 @@ JAVA = os.path.join(ROOT, "ports", "ZigZag.java")
 JS = os.path.join(ROOT, "js", "zigzag.js")
 
 MODES = ["binary", "gray", "color"]
-PARAMS = [(30, 90, 0), (45, 60, -15), (12, 100, 25), (100, 75, 0)]
+# (size, weight, threshold offset, 2x upsample) — size "auto" is the default rule
+PARAMS = [("auto", 90, 0, True), (30, 90, 0, True), (45, 60, -15, True),
+          (12, 100, 25, True), (100, 75, 0, True), (30, 90, 0, False)]
 
 
 # ── test corpus ──────────────────────────────────────────────────────────────
@@ -74,24 +84,32 @@ def corpus(d):
     put("row", np.arange(60, dtype=np.uint8).reshape(1, 60))  # window wider than image
     put("column", np.arange(60, dtype=np.uint8).reshape(60, 1))
     put("flat", np.full((40, 40), 128, np.uint8))
+    # A4 proportions, large enough that the automatic size is not clamped (35)
+    put("a4_jpg", cv2.resize(bgr, (900, 1273), interpolation=cv2.INTER_LINEAR), "jpg",
+        [cv2.IMWRITE_JPEG_QUALITY, 92])
     return out
 
 
 # ── runners: each returns a HxW or HxWx3 uint8 array in RGB order ────────────
 
-def run_python(src, mode, size, weight, off, d):
+def run_python(src, mode, size, weight, off, up, d):
     dst = os.path.join(d, "py.png")
     subprocess.run([sys.executable, PY, src, "-m", mode, "-s", str(size),
-                    "-w", str(weight), "-T", str(off), "-o", dst],
+                    "-w", str(weight), "-T", str(off), "-o", dst]
+                   + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
     return read(dst)
 
 
-def run_java(src, mode, size, weight, off, d):
+JAVA_CP = None   # compiled once by main(); `java ZigZag.java` recompiles every call
+
+
+def run_java(src, mode, size, weight, off, up, d):
     dst = os.path.join(d, "java.png")
-    subprocess.run(["java", JAVA, src, f"--mode={mode}", f"--size={size}",
+    subprocess.run(["java", "-cp", JAVA_CP, "ZigZag", src, f"--mode={mode}", f"--size={size}",
                     f"--weight={weight}", f"--threshold-offset={off}",
-                    f"--output={dst}"], check=True, capture_output=True)
+                    f"--output={dst}"] + ([] if up else ["--no-upsample"]),
+                   check=True, capture_output=True)
     return read(dst)
 
 
@@ -109,7 +127,7 @@ fs.writeFileSync(process.argv[4], Buffer.concat([
 """
 
 
-def run_js(src, mode, size, weight, off, d):
+def run_js(src, mode, size, weight, off, up, d):
     raw = os.path.join(d, "in.rgba")
     if not os.path.exists(raw):
         bgr = cv2.imread(src, cv2.IMREAD_COLOR)
@@ -122,7 +140,7 @@ def run_js(src, mode, size, weight, off, d):
         f.write(JS_DRIVER % JS.replace("\\", "/"))
     dst = os.path.join(d, "js.raw")
     opts = json.dumps({"mode": mode, "size": size, "weight": weight,
-                       "thresholdOffset": off})
+                       "thresholdOffset": off, "upsample": up})
     subprocess.run(["node", drv, raw, opts, dst], check=True, capture_output=True)
     blob = open(dst, "rb").read()
     w, h = np.frombuffer(blob[:8], np.int32)
@@ -139,26 +157,100 @@ def have(cmd):
     return shutil.which(cmd) is not None
 
 
+# ── automatic size rule: same integer in every port ──────────────────────────
+
+AUTO_JS = r"""
+import { autoSize } from '%s';
+import fs from 'fs';
+const pairs = fs.readFileSync(process.argv[2], 'utf8').trim().split('\n');
+fs.writeFileSync(process.argv[3], pairs.map(l => { const [w, h] = l.split(' ').map(Number);
+    return autoSize(w, h); }).join('\n'));
+"""
+
+AUTO_JAVA = r"""
+import java.nio.file.*;
+import java.util.stream.Collectors;
+public class AutoCheck {
+    public static void main(String[] a) throws Exception {
+        Files.writeString(Path.of(a[1]), Files.readAllLines(Path.of(a[0])).stream().map(l -> {
+            String[] p = l.split(" ");
+            return String.valueOf(ZigZag.autoSize(Integer.parseInt(p[0]), Integer.parseInt(p[1])));
+        }).collect(Collectors.joining("\n")));
+    }
+}
+"""
+
+
+def auto_pairs():
+    """Dimensions around the clamps, plus the random sample whose diagonal/45
+    lands closest to a .5 rounding boundary — where a sloppy port would slip."""
+    rng = np.random.default_rng(11)
+    pairs = {(w, h) for w in range(1, 120, 7) for h in range(1, 12000, 97)}
+    wh = rng.integers(1, 20001, size=(400000, 2))
+    x = np.sqrt(wh[:, 0].astype(float) ** 2 + wh[:, 1].astype(float) ** 2) / 45
+    near = np.argsort(np.abs(x - np.floor(x) - 0.5))[:4000]
+    pairs |= {(int(w), int(h)) for w, h in wh[near]}
+    pairs |= {(int(w), int(h)) for w, h in wh[:4000]}
+    return sorted(pairs)
+
+
+def check_auto(runners, d):
+    pairs = auto_pairs()
+    ref = [auto_size(w, h) for w, h in pairs]
+    src = os.path.join(d, "pairs.txt")
+    with open(src, "w") as f:
+        f.write("\n".join(f"{w} {h}" for w, h in pairs))
+    fails = 0
+    for name in runners:
+        if name == "python":
+            continue
+        dst = os.path.join(d, f"auto_{name}.txt")
+        if name == "js":
+            drv = os.path.join(d, "auto.mjs")
+            with open(drv, "w") as f:
+                f.write(AUTO_JS % JS.replace("\\", "/"))
+            subprocess.run(["node", drv, src, dst], check=True, capture_output=True)
+        else:
+            subprocess.run(["java", "-cp", JAVA_CP, "AutoCheck", src, dst],
+                           check=True, capture_output=True)
+        got = [int(v) for v in open(dst).read().split()]
+        bad = sum(a != b for a, b in zip(ref, got)) + abs(len(ref) - len(got))
+        print(f"  {'OK  ' if not bad else 'FAIL'} auto size rule, {name}: "
+              f"{len(pairs)} dimensions, {bad} disagreements")
+        fails += bad > 0
+    return fails
+
+
 def main():
     ap = argparse.ArgumentParser(description="ZigZag cross-port parity check")
     ap.add_argument("--keep", action="store_true", help="keep the working directory")
     args = ap.parse_args()
 
     runners = {"python": run_python}
-    if have("java"):
+    if have("java") and have("javac"):
         runners["java"] = run_java
     else:
-        print("! java not found — Java port skipped")
+        print("! java/javac not found — Java port skipped")
     if have("node"):
         runners["js"] = run_js
     else:
         print("! node not found — JS port skipped")
 
     d = tempfile.mkdtemp(prefix="zigzag-parity-")
+    if "java" in runners:
+        global JAVA_CP
+        JAVA_CP = os.path.join(d, "classes")
+        drv = os.path.join(d, "AutoCheck.java")
+        with open(drv, "w") as f:
+            f.write(AUTO_JAVA)
+        subprocess.run(["javac", "-d", JAVA_CP, JAVA, drv], check=True)
     images = corpus(d)
     ref = "python"
     others = [k for k in runners if k != ref]
     checks = fails = 0
+
+    print(f"\nautomatic size rule vs {ref}:")
+    auto_fails = check_auto(runners, d)
 
     print(f"\n{len(images)} images x {len(MODES)} modes x {len(PARAMS)} parameter sets "
           f"vs {ref}: {', '.join(others) or '(nothing to compare)'}\n")
@@ -167,20 +259,19 @@ def main():
         os.makedirs(sub, exist_ok=True)
         worst = []
         for mode in MODES:
-            for size, weight, off in PARAMS:
-                a = runners[ref](src, mode, size, weight, off, sub)
+            for size, weight, off, up in PARAMS:
+                tag = f"{other_tag(mode, size, weight, off, up)}"
+                a = runners[ref](src, mode, size, weight, off, up, sub)
                 for other in others:
-                    b = runners[other](src, mode, size, weight, off, sub)
+                    b = runners[other](src, mode, size, weight, off, up, sub)
                     checks += 1
                     if a.shape != b.shape:
-                        worst.append(f"{other} {mode} {size}/{weight}/{off}: "
-                                     f"shape {a.shape} vs {b.shape}")
+                        worst.append(f"{other} {tag}: shape {a.shape} vs {b.shape}")
                         fails += 1
                     elif not (a == b).all():
                         n = int((a != b).sum())
                         dmax = int(np.abs(a.astype(int) - b.astype(int)).max())
-                        worst.append(f"{other} {mode} {size}/{weight}/{off}: "
-                                     f"{n} px differ, max delta {dmax}")
+                        worst.append(f"{other} {tag}: {n} px differ, max delta {dmax}")
                         fails += 1
         status = "OK  " if not worst else "FAIL"
         print(f"  {status} {name}")
@@ -189,9 +280,14 @@ def main():
 
     if not args.keep:
         shutil.rmtree(d, ignore_errors=True)
+    fails += auto_fails
     print(f"\n{checks} comparisons, {fails} failures — "
           f"{'ALL PORTS BIT-IDENTICAL' if not fails else 'DIVERGENCE'}")
     return 1 if fails else 0
+
+
+def other_tag(mode, size, weight, off, up):
+    return f"{mode} {size}/{weight}/{off}{'' if up else ' 1x'}"
 
 
 if __name__ == "__main__":

@@ -22,12 +22,16 @@
  *       await gpu.init();                      // throws if no adapter
  *       gpu.maxPixels;                         // largest image this device accepts
  *       await gpu.uploadImage(imageData);      // once per image
- *       const res = await gpu.process({ mode: 'binary', size: 30, weight: 90 });
+ *       const res = await gpu.process({ mode: 'binary' });   // size: auto
  *       // res: { data: Uint8ClampedArray (RGBA), width, height, info }
  *   }
  */
 
-import { ZigZag, MODES } from './zigzag.js';
+import { ZigZag, resolveOptions } from './zigzag.js';
+
+/** Largest window whose box sums stay exact in float32: (2r+1)^2 * 255 < 2^24.
+ *  The automatic size tops out at 250, well inside it. */
+const GPU_MAX_SIZE = 254;
 
 // ─── Params struct (32 bytes, 16-byte aligned) ──────────────────────────────
 
@@ -384,16 +388,14 @@ export class ZigZagGPU {
      */
     async process(opts = {}) {
         if (!this.#imgWidth) throw new Error('Call uploadImage() first');
-        const mode = opts.mode ?? 'binary';
-        if (!MODES.includes(mode)) {
-            throw new Error(`invalid mode: ${mode} (expected binary, gray or color)`);
-        }
-        const size = opts.size ?? 30;
-        const weight = opts.weight ?? 90;
-        const upsample = opts.upsample ?? true;
-        const offset = opts.thresholdOffset ?? 0;   // manual shift of the auto threshold
-
         const w = this.#imgWidth, h = this.#imgHeight;
+        // same defaults and validation as the CPU port (size: auto from the diagonal)
+        const { mode, size, weight, upsample, thresholdOffset: offset, auto } =
+            resolveOptions(opts, w, h);
+        if (size > GPU_MAX_SIZE) {
+            throw new RangeError(`size ${size} exceeds the GPU limit (${GPU_MAX_SIZE}); use the CPU port`);
+        }
+
         const B = this.#bufs;
         const key = size + ':' + weight;
 
@@ -402,7 +404,7 @@ export class ZigZagGPU {
             this.#fgKey = key;
         }
         const thr = Math.min(255, Math.max(0, this.#otsu + offset));
-        const info = { size, weight, otsu: this.#otsu, threshold: thr };
+        const info = { size, autoSize: auto, weight, otsu: this.#otsu, threshold: thr };
 
         // ─── output stage ───
         const is2x = mode === 'binary' && upsample;

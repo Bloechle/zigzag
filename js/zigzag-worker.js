@@ -24,6 +24,12 @@ self.onmessage = ({ data: msg }) => {
         self.postMessage({ id: msg.id, error: 'no source image' });
         return;
     }
-    const res = ZigZag.process(source, msg.opts);
+    let res;
+    try {
+        res = ZigZag.process(source, msg.opts);
+    } catch (err) {                // e.g. an allocation refused: report, stay alive
+        self.postMessage({ id: msg.id, error: String(err?.message ?? err) });
+        return;
+    }
     self.postMessage({ id: msg.id, ...res }, [res.data.buffer]);
 };

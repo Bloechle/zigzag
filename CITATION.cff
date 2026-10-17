@@ -1,0 +1,43 @@
+cff-version: 1.2.0
+message: "If you use ZigZag in your research, please cite the paper below."
+title: "ZigZag"
+type: software
+version: 1.1.0
+date-released: 2026-10-17
+license: AGPL-3.0-only
+repository-code: "https://github.com/Bloechle/zigzag"
+url: "https://bloechle.github.io/zigzag/"
+authors:
+  - family-names: Bloechle
+    given-names: Jean-Luc
+  - family-names: Hennebert
+    given-names: Jean
+  - family-names: Gisler
+    given-names: Christophe
+preferred-citation:
+  type: conference-paper
+  title: "ZigZag: A Robust Adaptive Approach to Non-Uniformly Illuminated Document Image Binarization"
+  authors:
+    - family-names: Bloechle
+      given-names: Jean-Luc
+    - family-names: Hennebert
+      given-names: Jean
+    - family-names: Gisler
+      given-names: Christophe
+  collection-title: "Proceedings of the ACM Symposium on Document Engineering 2024"
+  conference:
+    name: "DocEng '24"
+    city: "San Jose, CA"
+    country: US
+  publisher:
+    name: "Association for Computing Machinery"
+    city: "New York, NY"
+  year: 2024
+  doi: "10.1145/3685650.3685661"
+  isbn: "9798400711695"
+  number: 3
+  keywords:
+    - OCR
+    - binarization
+    - image processing
+    - image thresholding

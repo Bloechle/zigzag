@@ -329,9 +329,10 @@
                 <label for="slSize">Window</label>
                 <input type="range" id="slSize"
                        title="Size of the local analysis window, in pixels.">
-                <span id="valSize" class="param-val">30 px</span>
+                <span id="valSize" class="param-val">Auto</span>
                 <p class="param-hint">How far ZigZag looks around each pixel to judge the local lighting.
-                   Lower it for fine print, raise it for large text or broad shadows.</p>
+                   Auto scales it with the photo's resolution, which suits most pages. Lower it for
+                   fine print, raise it for large text or broad shadows.</p>
             </div>
             <div class="param-row">
                 <label for="slWeight">Background</label>
@@ -339,7 +340,8 @@
                        title="How bright a pixel must be, relative to its neighbours, to count as background.">
                 <span id="valWeight" class="param-val">90 %</span>
                 <p class="param-hint">How bright a pixel must be, next to its neighbours, to be treated as
-                   background. Lower it to about 60 % to rescue faint ink on degraded documents.</p>
+                   background. 90 % suits nearly every page; 80–90 % is the useful range, and 100 % is
+                   too strict.</p>
             </div>
             <div class="param-row">
                 <label for="slThr">Ink</label>
@@ -387,17 +389,19 @@
     const UNITS = { slSize: ' px', slWeight: ' %', slThr: '' };
 
     // Discrete scales: the slider carries an *index*, the value comes from here.
-    // Window stops at 128: past ~192 the local mean drifts toward global and the
-    // shadow comes back as ink, and at 256 (2r+1)^2*255 crosses 2^24, the largest
-    // integer the GPU's f32 box sums still represent exactly.
+    // Window: 0 = automatic (from the image diagonal, see autoSize in zigzag.js).
+    // Manual stops end at 128: past ~192 the local mean drifts toward global and
+    // the shadow comes back as ink, and at 256 (2r+1)^2*255 crosses 2^24, the
+    // largest integer the GPU's f32 box sums still represent exactly.
     // Weight steps of 5 were indistinguishable (<0.15 pt of ink), so 10.
     // Ink stops at +/-60: beyond it the threshold saturates instead of nudging.
+    const AUTO = 0;
     const SCALES = {
-        slSize:   [4, 8, 12, 16, 20, 24, 30, 40, 56, 80, 128],
+        slSize:   [AUTO, 4, 8, 12, 16, 20, 24, 30, 40, 56, 80, 128],
         slWeight: [50, 60, 70, 80, 90, 100],
         slThr:    Array.from({ length: 25 }, (_, i) => -60 + i * 5),
     };
-    const DEFAULTS = { slSize: 30, slWeight: 90, slThr: 0 };
+    const DEFAULTS = { slSize: AUTO, slWeight: 90, slThr: 0 };
 
     const sliderValue = s => SCALES[s][+el[s].value];
     /** Snap a raw value onto a scale (also migrates prefs from an older scale). */
@@ -410,13 +414,14 @@
         el[s].value = best;
     }
     const PREFS_KEY = 'zigzag.prefs';
+    const PREFS_VERSION = 2;         // 2: Window gained "Auto", the new default
 
     // The CPU port needs ~64 bytes/pixel of float64 scratch and runs at ~0.4 s/MP,
     // so it gets a much tighter budget than the GPU (whose ceiling is a device limit).
     const CPU_MAX_PIXELS = 4_000_000;
     const GPU_MAX_PIXELS = 12_000_000;
 
-    let gpu = null;                  // WebGPU accelerator, null => CPU
+    let gpu = null;                  // WebGPU accelerator, null => CPU (set once gpuReady settles)
     let worker = null;               // CPU port off the main thread, null => inline
     let srcImage = null;             // ImageData of the (possibly downscaled) source
     let srcName = 'document';
@@ -429,19 +434,28 @@
     let lastBadge = '', badgeTimer = 0;
 
     // ── backends ──
-    if (ZigZagGPU.isSupported()) {
-        try {
-            const g = new ZigZagGPU();
-            await g.init();
-            gpu = g;
-        } catch { gpu = null; }
-    }
     /** Landing-page backend line — also refreshed when the GPU is dropped mid-session. */
     function setGpuStatus() {
         el.gpuStatus.textContent = gpu ? '⚡ WebGPU acceleration active' : 'Running on CPU';
         el.gpuStatus.classList.toggle('on', !!gpu);
     }
-    setGpuStatus();
+    // Initialised in the background: awaiting it here would leave every button
+    // dead until the adapter answers. Image loading awaits it instead.
+    const gpuReady = (async () => {
+        if (!ZigZagGPU.isSupported()) return;
+        try {
+            const g = new ZigZagGPU();
+            await g.init();
+            gpu = g;
+        } catch { gpu = null; }
+    })().then(setGpuStatus);
+
+    /** Give up on the GPU for this session and free its buffers. */
+    function dropGpu() {
+        try { gpu?.destroy(); } catch { /* already lost */ }
+        gpu = null;
+        setGpuStatus();
+    }
 
     const jobs = new Map();
     let jobId = 0;
@@ -485,6 +499,7 @@
     function savePrefs() {
         try {
             localStorage.setItem(PREFS_KEY, JSON.stringify({
+                v: PREFS_VERSION,
                 mode,
                 size: sliderValue('slSize'),
                 weight: sliderValue('slWeight'),
@@ -502,6 +517,9 @@
                 el.sheet.classList.add('hints');
                 el.btnHints.setAttribute('aria-pressed', 'true');
             }
+            // before v2 the Window default was 30, so a stored 30 means "never
+            // touched": move it to the new automatic default
+            if ((p.v ?? 1) < 2 && +p.size === 30) delete p.size;
             for (const [key, s] of [['size', 'slSize'], ['weight', 'slWeight'], ['thr', 'slThr']]) {
                 if (p[key] != null) setSliderValue(s, +p[key]);   // snaps old values
             }
@@ -515,7 +533,14 @@
         srcImage = image;
         allowUpsample = true;     // a previous oversized image must not stick at 1x
         if (gpu) {
-            try { await gpu.uploadImage(image); } catch { gpu = null; setGpuStatus(); }
+            try { await gpu.uploadImage(image); } catch { dropGpu(); }
+        }
+        // sized for the GPU budget but the GPU is gone: the CPU port needs
+        // ~64 bytes/pixel of float64 scratch, so shrink before going on
+        if (!gpu && image.width * image.height > CPU_MAX_PIXELS) {
+            origSize ??= [image.width, image.height];
+            notify('GPU unavailable — reduced for the CPU');
+            return setSource(await toImageData(image, CPU_MAX_PIXELS));
         }
         if (worker) {
             const copy = new Uint8ClampedArray(image.data);
@@ -551,6 +576,7 @@
     }
 
     async function loadBlob(blob, name) {
+        await gpuReady;
         const budget = gpu ? Math.min(gpu.maxPixels, GPU_MAX_PIXELS) : CPU_MAX_PIXELS;
         srcName = (name || 'document').replace(/\.[^/.]+$/, '');
         const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image' });
@@ -575,7 +601,9 @@
         c.width = h; c.height = w;
         const ctx = c.getContext('2d', { willReadFrequently: true });
         ctx.setTransform(0, 1, -1, 0, h, 0);   // (x, y) -> (h - y, x)
-        ctx.drawImage(await createImageBitmap(srcImage), 0, 0);
+        const bmp = await createImageBitmap(srcImage);
+        ctx.drawImage(bmp, 0, 0);
+        bmp.close();
         if (origSize) origSize = [origSize[1], origSize[0]];
         await setSource(ctx.getImageData(0, 0, h, w));
     }
@@ -605,35 +633,44 @@
         el.spinner.classList.remove('hidden');
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
+        const size = sliderValue('slSize');
         const opts = {
             mode,
-            size: sliderValue('slSize'),
+            size: size === AUTO ? null : size,
             weight: sliderValue('slWeight'),
             thresholdOffset: sliderValue('slThr'),
             upsample: allowUpsample,
         };
         const t0 = performance.now();
         let res = null, backend = 'cpu';
-        if (gpu) {
-            try {
-                res = await gpu.process(opts);
-                backend = 'gpu';
-            } catch {
-                gpu = null;
-                setGpuStatus();
-                // the source was sized for the GPU budget; the CPU port needs
-                // ~64 bytes/pixel of float64 scratch, so shrink before falling back
-                if (srcImage.width * srcImage.height > CPU_MAX_PIXELS) {
-                    busy = false;                 // setSource() re-enters run()
-                    pending = false;
-                    origSize ??= [srcImage.width, srcImage.height];
-                    notify('GPU unavailable — reduced for the CPU');
-                    return setSource(await toImageData(srcImage, CPU_MAX_PIXELS));
+        try {
+            if (gpu) {
+                try {
+                    res = await gpu.process(opts);
+                    backend = 'gpu';
+                } catch {
+                    dropGpu();
+                    // the source was sized for the GPU budget; the CPU port needs
+                    // ~64 bytes/pixel of float64 scratch, so shrink before falling back
+                    if (srcImage.width * srcImage.height > CPU_MAX_PIXELS) {
+                        busy = false;                 // setSource() re-enters run()
+                        pending = false;
+                        origSize ??= [srcImage.width, srcImage.height];
+                        notify('GPU unavailable — reduced for the CPU');
+                        return setSource(await toImageData(srcImage, CPU_MAX_PIXELS));
+                    }
                 }
             }
+            if (!res) res = await cpuProcess(opts);
+            if (!res) res = ZigZag.process(srcImage, opts);   // worker died mid-flight
+        } catch (err) {
+            // never leave the spinner up and the queue locked behind a failed run
+            busy = false;
+            pending = false;
+            el.spinner.classList.add('hidden');
+            console.error(err);
+            return notify('Processing failed — try a smaller image');
         }
-        if (!res) res = await cpuProcess(opts);
-        if (!res) res = ZigZag.process(srcImage, opts);   // worker died mid-flight
         const ms = performance.now() - t0;
 
         busy = false;
@@ -653,7 +690,8 @@
         const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
         const wt = i.weight !== 90 ? ` · w ${i.weight}` : '';
         clearTimeout(badgeTimer);
-        lastBadge = `${srcImage.width}×${srcImage.height}${ds}${up} · size ${i.size}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+        const sz = i.autoSize ? `size ${i.size} (auto)` : `size ${i.size}`;
+        lastBadge = `${srcImage.width}×${srcImage.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
         el.infoBadge.textContent = lastBadge;
 
         el.btnSave.disabled = false;
@@ -839,6 +877,7 @@
 
     function showSlider(s, v) {
         const n = sliderValue(s);
+        if (s === 'slSize' && n === AUTO) { el[v].textContent = 'Auto'; return; }
         el[v].textContent = (s === 'slThr' && n > 0 ? '+' + n : String(n)) + UNITS[s];
     }
 
@@ -923,7 +962,7 @@
     el.btnNew.addEventListener('click', () => {
         srcImage = null;
         origSize = null;
-        gpu?.destroy();                          // release the per-image GPU buffers
+        try { gpu?.destroy(); } catch { /* lost */ }   // release the per-image GPU buffers
         worker?.postMessage({ image: null });    // and the worker's copy
         el.canvasResult.width = el.canvasResult.height = 0;
         el.canvasOriginal.width = el.canvasOriginal.height = 0;
@@ -945,7 +984,7 @@
         a.href = URL.createObjectURL(blob);
         a.download = `${srcName}_ZZ.png`;
         a.click();
-        URL.revokeObjectURL(a.href);
+        setTimeout(() => URL.revokeObjectURL(a.href), 1000);   // Safari/Firefox read it async
     }));
 
     // one button: the native share sheet where files can be shared, clipboard elsewhere

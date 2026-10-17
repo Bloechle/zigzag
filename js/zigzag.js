@@ -20,12 +20,43 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
+const VERSION = '1.1.0';
 const OTSU_CAP = 250;
 const MODES = ['binary', 'gray', 'color'];
+/** size: null = automatic, from the image diagonal (see autoSize). */
+const DEFAULTS = Object.freeze({ mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0 });
+
+/**
+ * Automatic window size: one window per 45 px of image diagonal, clamped to
+ * [20, 250]. Keeps the window proportional to the page whatever the camera
+ * resolution. Written with sqrt (correctly rounded in IEEE 754, unlike hypot)
+ * and an explicit floor(x + 0.5), so the three ports agree on every input.
+ * 250 also keeps the GPU's float32 box sums exact: (251^2) * 255 < 2^24.
+ */
+function autoSize(w, h) {
+    return Math.min(250, Math.max(20, Math.floor(Math.sqrt(w * w + h * h) / 45 + 0.5)));
+}
+
+/** Resolve and validate options; throws on values the pipeline cannot honour. */
+function resolveOptions(opts, w, h) {
+    const o = { ...DEFAULTS };
+    for (const k of Object.keys(DEFAULTS)) if (opts[k] != null) o[k] = opts[k];
+    if (opts.size === 'auto') o.size = null;
+    if (!MODES.includes(o.mode)) {
+        throw new Error(`invalid mode: ${o.mode} (expected binary, gray or color)`);
+    }
+    const auto = o.size == null;
+    if (auto) o.size = autoSize(w, h);
+    if (!Number.isInteger(o.size) || o.size < 2) throw new RangeError(`invalid size: ${o.size} (expected an integer >= 2)`);
+    if (!(o.weight > 0)) throw new RangeError(`invalid weight: ${o.weight} (expected > 0)`);
+    return { ...o, auto };
+}
 
 class ZigZag {
 
     // ── helpers ──────────────────────────────────────────────────────────────
+
+    static autoSize(w, h) { return autoSize(w, h); }
 
     /** Rec. 601 luma, round-half-up. RGBA bytes → Float64Array. */
     static grayImage(rgba, w, h) {
@@ -54,19 +85,29 @@ class ZigZag {
         }
     }
 
-    /** Vertical rolling sum over [y-r..y+r], zero-padded (truncated window). */
+    /** Vertical rolling sum over [y-r..y+r], zero-padded (truncated window).
+     *  Walks the image row by row with one running sum per column: the same
+     *  additions in the same order as a column-wise loop (bit-identical), but
+     *  with sequential memory access — about 4x faster on large images. */
     static #vsum(src, dst, w, h, r) {
-        for (let x = 0; x < w; x++) {
-            let sum = 0;
-            const initB = Math.min(r, h - 1);
-            for (let y = 0; y <= initB; y++) sum += src[y * w + x];
-            dst[x] = sum;
-            for (let y = 1; y < h; y++) {
-                const add = y + r, rem = y - r - 1;
-                if (add < h) sum += src[add * w + x];
-                if (rem >= 0) sum -= src[rem * w + x];
-                dst[y * w + x] = sum;
+        const acc = new Float64Array(w);
+        const initB = Math.min(r, h - 1);
+        for (let y = 0; y <= initB; y++) {
+            const b = y * w;
+            for (let x = 0; x < w; x++) acc[x] += src[b + x];
+        }
+        dst.set(acc, 0);
+        for (let y = 1; y < h; y++) {
+            const add = y + r, rem = y - r - 1;
+            if (add < h) {
+                const b = add * w;
+                for (let x = 0; x < w; x++) acc[x] += src[b + x];
             }
+            if (rem >= 0) {
+                const b = rem * w;
+                for (let x = 0; x < w; x++) acc[x] -= src[b + x];
+            }
+            dst.set(acc, y * w);
         }
     }
 
@@ -177,20 +218,15 @@ class ZigZag {
     /**
      * imageData: { data: RGBA bytes, width, height }
      * opts: { mode: 'binary'|'gray'|'color', size, weight, upsample,
-     *         thresholdOffset }  — offset shifts the auto Otsu threshold (0 = auto)
+     *         thresholdOffset }  — size null/'auto' (default) = from the image
+     *         diagonal; offset shifts the auto Otsu threshold (0 = auto)
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {
         const { width: w, height: h } = imageData;
         const rgba = imageData.data;
-        const mode = opts.mode ?? 'binary';
-        if (!MODES.includes(mode)) {
-            throw new Error(`invalid mode: ${mode} (expected binary, gray or color)`);
-        }
-        const size = opts.size ?? 30;
-        const weight = opts.weight ?? 90;
-        const upsample = opts.upsample ?? true;
-        const offset = opts.thresholdOffset ?? 0;   // manual shift of the auto threshold
+        const { mode, size, weight, upsample, thresholdOffset: offset, auto } =
+            resolveOptions(opts, w, h);
 
         const r = Math.floor(size / 2);
         const wf = weight / 100;
@@ -231,16 +267,13 @@ class ZigZag {
             return fg;
         };
 
-        const info = { size, weight, otsu: null, threshold: null };
-
         const fg = normalize(gray, maskVal);
 
         // Otsu threshold on the foreground histogram (10% margin crop),
         // optionally shifted by the manual offset
         const otsu = ZigZag.otsu(ZigZag.histogram(fg, w, h, 10));
         const thr = Math.min(255, Math.max(0, otsu + offset));
-        info.otsu = otsu;
-        info.threshold = thr;
+        const info = { size, autoSize: auto, weight, otsu, threshold: thr };
 
         if (mode === 'gray' || mode === 'color') {
             // antialiased background cleanup: blend toward white with the 2x2
@@ -286,4 +319,4 @@ class ZigZag {
     }
 }
 
-export { ZigZag, MODES };
+export { ZigZag, MODES, DEFAULTS, VERSION, autoSize, resolveOptions };

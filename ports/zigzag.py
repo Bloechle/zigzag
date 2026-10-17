@@ -19,15 +19,17 @@ identical across backends and across the Java/JS ports.
 Copyright (c) Jean-Luc Bloechle - AGPL v3
 
 CLI:
-  python zigzag.py photo.jpg                     # binary, size 30, weight 90
+  python zigzag.py photo.jpg                     # binary, automatic size, weight 90
   python zigzag.py -m color photo.jpg            # color foreground
-  python zigzag.py -s 40 -w 60 old_letter.jpg    # historical documents
+  python zigzag.py -s 30 photo.jpg               # fixed window (the 1.0 default)
 """
 
 import argparse
 import csv
 import glob
+import math
 import os
+import sys
 import time
 
 import cv2
@@ -40,8 +42,16 @@ except Exception:
     cp = None
     HAS_GPU = False
 
+__version__ = '1.1.0'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
+
+
+def auto_size(w, h):
+    """Automatic window size: one window per 45 px of image diagonal, clamped
+    to [20, 250]. sqrt (correctly rounded, unlike hypot) and an explicit
+    floor(x + 0.5) keep the three ports in agreement on every input."""
+    return min(250, max(20, math.floor(math.sqrt(w * w + h * h) / 45 + 0.5)))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -122,16 +132,27 @@ def upsample2x(src, xp=np):
 
 # ── core pipeline (Algorithm 1 of the paper) ─────────────────────────────────
 
-def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
+def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=None,
             threshold_offset=0):
     """
     rgb: HxWx3 uint8 (RGB). Returns (output_uint8, info_dict).
+    size: window in px, or None / 'auto' (default) for auto_size(width, height)
     threshold_offset: manual shift of the auto Otsu threshold (0 = auto)
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
     if mode not in MODES:
         raise ValueError(f"invalid mode: {mode!r} (expected binary, gray or color)")
+    if getattr(rgb, 'ndim', 0) != 3 or rgb.shape[2] != 3:
+        raise ValueError(f"expected an HxWx3 RGB array, got shape {getattr(rgb, 'shape', None)}")
+    auto = size is None or size == 'auto'
+    if auto:
+        size = auto_size(rgb.shape[1], rgb.shape[0])
+    if int(size) != size or size < 2:
+        raise ValueError(f"invalid size: {size!r} (expected an integer >= 2)")
+    if not weight > 0:
+        raise ValueError(f"invalid weight: {weight!r} (expected > 0)")
+    size = int(size)
     if backend is None or backend == 'auto':
         backend = 'gpu' if HAS_GPU else 'cpu'
     if backend == 'gpu' and not HAS_GPU:
@@ -156,29 +177,23 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
     # Pass B — normalization against the local mean of background-only pixels
     cnt_bg = box(mask.astype(xp.float64), r)
 
-    def normalize(channel):
-        """fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows → 255."""
-        mean_bg = box(channel * mask, r) / xp.maximum(cnt_bg, 1.0)
-        out = xp.where((channel >= mean_bg) | (cnt_bg < 0.5), 255.0,
-                       xp.minimum(255.0, channel * 256.0 / xp.maximum(1.0, mean_bg)))
-        return out
-
-    info = {'size': size, 'weight': weight, 'otsu': None, 'threshold': None,
-            'backend': backend}
+    # fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows → 255
+    mean_bg = box(gray * mask, r) / xp.maximum(cnt_bg, 1.0)
+    fg = xp.where((gray >= mean_bg) | (cnt_bg < 0.5), 255.0,
+                  xp.minimum(255.0, gray * 256.0 / xp.maximum(1.0, mean_bg)))
+    del mean_bg
 
     def host(a):
         return cp.asnumpy(a) if gpu else a
-
-    fg = normalize(gray)
 
     # Otsu threshold on the foreground histogram (10% margin crop)
     mh, mw = h * 10 // 100, w * 10 // 100
     region = fg[mh:h - mh, mw:w - mw]
     hist = xp.bincount(xp.clip(region, 0, 255).astype(xp.uint8).ravel(), minlength=256)
-    auto = otsu(cp.asnumpy(hist) if gpu else hist)
-    thr = min(255, max(0, auto + threshold_offset))
-    info['otsu'] = auto
-    info['threshold'] = thr
+    otsu_thr = otsu(cp.asnumpy(hist) if gpu else hist)
+    thr = min(255, max(0, otsu_thr + threshold_offset))
+    info = {'size': size, 'auto_size': auto, 'weight': weight, 'otsu': otsu_thr,
+            'threshold': thr, 'backend': backend}
 
     if mode in ('gray', 'color'):
         # antialiased background cleanup: threshold the 2x-upsampled foreground,
@@ -203,16 +218,39 @@ def process(rgb, mode='binary', size=30, weight=90, upsample=True, backend=None,
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+def _size_arg(v):
+    if v == "auto":
+        return None
+    try:
+        n = int(v)
+    except ValueError:
+        n = 0
+    if n < 2:
+        raise argparse.ArgumentTypeError(f"expected an integer >= 2 or 'auto', got {v!r}")
+    return n
+
+
+def _weight_arg(v):
+    try:
+        n = int(v)
+    except ValueError:
+        n = 0
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {v!r}")
+    return n
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="ZigZag — adaptive document image binarization (ACM DocEng 2024).")
     parser.add_argument("images", nargs="+", help="input image file(s)")
     parser.add_argument("-m", "--mode", choices=MODES,
                         default="binary", help="output mode (default: binary)")
-    parser.add_argument("-s", "--size", type=int, default=30,
-                        help="window size in px, typically 10-100 (default: 30)")
-    parser.add_argument("-w", "--weight", type=int, default=90,
-                        help="mean weight in percent, typically 50-100 (default: 90)")
+    parser.add_argument("-s", "--size", type=_size_arg, default=None,
+                        help="window size in px, or 'auto' (default: auto, "
+                             "from the image diagonal; 30 was the 1.0 default)")
+    parser.add_argument("-w", "--weight", type=_weight_arg, default=90,
+                        help="mean weight in percent, 85-90 suits most pages (default: 90)")
     parser.add_argument("-T", "--threshold-offset", type=int, default=0,
                         help="manual shift of the auto Otsu threshold (default: 0 = auto)")
     parser.add_argument("-b", "--backend", choices=["auto", "gpu", "cpu"],
@@ -225,6 +263,7 @@ def main():
                         help="write per-image metrics (parameters, otsu, timings) to a CSV file")
     parser.add_argument("--no-upsample", action="store_true",
                         help="binary mode: skip the 2x upsampling")
+    parser.add_argument("--version", action="version", version=f"ZigZag {__version__}")
     args = parser.parse_args()
 
     if args.backend == "gpu" and not HAS_GPU:
@@ -232,7 +271,7 @@ def main():
 
     out_dir = None
     if args.output and (len(args.images) > 1 or os.path.isdir(args.output)
-                        or args.output.endswith(os.sep)):
+                        or args.output.endswith(("/", os.sep))):
         out_dir = args.output
         os.makedirs(out_dir, exist_ok=True)
 
@@ -251,19 +290,21 @@ def main():
             items.append((a, os.path.basename(a)))
 
     if not items:
-        print("No input images found.")
-        return
+        print("No input images found.", file=sys.stderr)
+        return 1
 
     rows = []
-    totals, count = {"load": 0.0, "proc": 0.0, "save": 0.0}, 0
+    totals, count, failed = {"load": 0.0, "proc": 0.0, "save": 0.0}, 0, 0
     for path, rel in items:
         if not os.path.exists(path):
-            print(f"File not found: {path}")
+            print(f"File not found: {path}", file=sys.stderr)
+            failed += 1
             continue
         t0 = time.perf_counter()
         bgr = cv2.imread(path, cv2.IMREAD_COLOR)
         if bgr is None:
-            print(f"Cannot read image: {path}")
+            print(f"Cannot read image: {path}", file=sys.stderr)
+            failed += 1
             continue
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         t_load = (time.perf_counter() - t0) * 1000
@@ -281,7 +322,10 @@ def main():
         else:
             dst = args.output or os.path.splitext(path)[0] + "_ZZ.png"
         t0 = time.perf_counter()
-        cv2.imwrite(dst, out if out.ndim == 2 else cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
+        if not cv2.imwrite(dst, out if out.ndim == 2 else cv2.cvtColor(out, cv2.COLOR_RGB2BGR)):
+            print(f"Cannot write image: {dst}", file=sys.stderr)
+            failed += 1
+            continue
         t_save = (time.perf_counter() - t0) * 1000
 
         totals["load"] += t_load
@@ -297,7 +341,8 @@ def main():
                   if info['threshold'] != info['otsu'] else f"otsu={info['otsu']} · ")
         timing = (f"load {t_load:.0f} · proc {t_proc:.0f} · save {t_save:.0f} ms"
                   if args.time else f"{t_proc:.0f} ms")
-        print(f"{path} → {dst}  [size={info['size']} weight={info['weight']} "
+        size_s = f"{info['size']} (auto)" if info['auto_size'] else str(info['size'])
+        print(f"{path} → {dst}  [size={size_s} weight={info['weight']} "
               f"· {otsu_s}{info['backend']} · {timing}]")
 
     if args.csv and rows:
@@ -314,7 +359,8 @@ def main():
         print(f"— {count} images · load {totals['load'] / 1000:.2f} s "
               f"· proc {totals['proc'] / 1000:.2f} s ({totals['proc'] / count:.0f} ms/image) "
               f"· save {totals['save'] / 1000:.2f} s")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

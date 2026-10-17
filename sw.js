@@ -2,7 +2,7 @@
 // Strategy: stale-while-revalidate (instant load, background refresh).
 // Bump CACHE on every deploy to force a full refresh.
 
-const CACHE = 'zigzag-v8';
+const CACHE = 'zigzag-v9';
 const SHELL = [
     './',
     'index.html',
@@ -33,14 +33,13 @@ self.addEventListener('fetch', e => {
     if (new URL(e.request.url).origin !== self.location.origin) return;
 
     // serve from cache immediately, refresh silently for the next load
+    const fresh = caches.open(CACHE).then(cache => fetch(e.request).then(resp => {
+        if (resp.ok) cache.put(e.request, resp.clone());
+        return resp;
+    })).catch(() => null);
+    e.waitUntil(fresh.then(() => {}));     // keep the worker alive until the refresh lands
     e.respondWith(
-        caches.open(CACHE).then(async cache => {
-            const cached = await cache.match(e.request);
-            const fresh = fetch(e.request).then(resp => {
-                if (resp.ok) cache.put(e.request, resp.clone());
-                return resp;
-            }).catch(() => null);
-            return cached || fresh;
-        })
+        caches.match(e.request, { ignoreSearch: e.request.mode === 'navigate' })
+            .then(async cached => cached || (await fresh)?.clone() || Response.error())
     );
 });

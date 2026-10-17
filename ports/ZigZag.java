@@ -27,13 +27,16 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
+    public static final String VERSION = "1.1.0";
     public static final int OTSU_CAP = 250;
+    /** Options.size value that selects the automatic window size. */
+    public static final int AUTO = 0;
     static final java.util.List<String> MODES = java.util.List.of("binary", "gray", "color");
 
     /** Pipeline options. */
     public static class Options {
         public String mode = "binary";     // binary | gray | color
-        public int size = 30;
+        public int size = AUTO;            // window in px, or AUTO (from the image diagonal)
         public int weight = 90;
         public boolean upsample = true;
         public int thresholdOffset = 0;    // manual shift of the auto Otsu threshold
@@ -42,6 +45,15 @@ public class ZigZag {
     /** Parameters used, auto Otsu and applied threshold. */
     public static class Info {
         public int size, weight, otsu, threshold;
+        public boolean autoSize;
+    }
+
+    /** Automatic window size: one window per 45 px of image diagonal, clamped
+     *  to [20, 250]. sqrt (correctly rounded, unlike hypot) and an explicit
+     *  floor(x + 0.5) keep the three ports in agreement on every input. */
+    public static int autoSize(int w, int h) {
+        double diag = Math.sqrt((double) w * w + (double) h * h);
+        return (int) Math.min(250, Math.max(20, Math.floor(diag / 45 + 0.5)));
     }
 
     public static class Result {
@@ -129,17 +141,31 @@ public class ZigZag {
                 tmp[base + x] = sum;
             }
         });
+        // vertical pass: one running sum per column, walked row by row inside
+        // strips of columns (one strip per task) - the same additions in the
+        // same order as a column-wise loop, with sequential memory access
         double[] dst = new double[w * h];
-        IntStream.range(0, w).parallel().forEach(x -> {   // vertical pass
-            double sum = 0;
-            int initB = Math.min(r, h - 1);
-            for (int y = 0; y <= initB; y++) sum += tmp[y * w + x];
-            dst[x] = sum;
+        int strip = 256, strips = (w + strip - 1) / strip;
+        int initB = Math.min(r, h - 1);
+        IntStream.range(0, strips).parallel().forEach(s -> {
+            int x0 = s * strip, x1 = Math.min(w, x0 + strip), sw = x1 - x0;
+            double[] acc = new double[sw];
+            for (int y = 0; y <= initB; y++) {
+                int b = y * w + x0;
+                for (int k = 0; k < sw; k++) acc[k] += tmp[b + k];
+            }
+            System.arraycopy(acc, 0, dst, x0, sw);
             for (int y = 1; y < h; y++) {
                 int add = y + r, rem = y - r - 1;
-                if (add < h) sum += tmp[add * w + x];
-                if (rem >= 0) sum -= tmp[rem * w + x];
-                dst[y * w + x] = sum;
+                if (add < h) {
+                    int b = add * w + x0;
+                    for (int k = 0; k < sw; k++) acc[k] += tmp[b + k];
+                }
+                if (rem >= 0) {
+                    int b = rem * w + x0;
+                    for (int k = 0; k < sw; k++) acc[k] -= tmp[b + k];
+                }
+                System.arraycopy(acc, 0, dst, y * w + x0, sw);
             }
         });
         return dst;
@@ -245,7 +271,15 @@ public class ZigZag {
                     "invalid mode: " + opts.mode + " (expected binary, gray or color)");
         }
         int w = img.getWidth(), h = img.getHeight(), n = w * h;
-        int r = opts.size / 2;
+        boolean auto = opts.size == AUTO;
+        int size = auto ? autoSize(w, h) : opts.size;
+        if (size < 2) {
+            throw new IllegalArgumentException("invalid size: " + opts.size + " (expected >= 2, or AUTO)");
+        }
+        if (opts.weight <= 0) {
+            throw new IllegalArgumentException("invalid weight: " + opts.weight + " (expected > 0)");
+        }
+        int r = size / 2;
         double wf = opts.weight / 100.0;
         int[] rgb = readRgb(img);          // decoded once, reused by color mode
         double[] gray = grayImage(rgb);
@@ -270,7 +304,8 @@ public class ZigZag {
         double[] cntBg = boxSum(maskCnt, w, h, r);
 
         Info info = new Info();
-        info.size = opts.size;
+        info.size = size;
+        info.autoSize = auto;
         info.weight = opts.weight;
         Result res = new Result();
         res.info = info;
@@ -279,9 +314,9 @@ public class ZigZag {
 
         // Otsu threshold on the foreground histogram (10% margin crop),
         // optionally shifted by the manual offset
-        int auto = otsu(histogram(fg, w, h, 10));
-        int thr = Math.min(255, Math.max(0, auto + opts.thresholdOffset));
-        info.otsu = auto;
+        int otsuThr = otsu(histogram(fg, w, h, 10));
+        int thr = Math.min(255, Math.max(0, otsuThr + opts.thresholdOffset));
+        info.otsu = otsuThr;
         info.threshold = thr;
 
         if (opts.mode.equals("gray")) {
@@ -353,41 +388,66 @@ public class ZigZag {
     // -- CLI ------------------------------------------------------------------
 
     static final String USAGE = "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
-            + "[--mode=binary|gray|color] [--size=N] [--weight=N] [--threshold-offset=N] "
-            + "[--no-upsample] [--time] [--csv=path]";
+            + "[--mode=binary|gray|color] [--size=N|auto] [--weight=N] [--threshold-offset=N] "
+            + "[--no-upsample] [--time] [--csv=path] [--version]";
 
+    /** Exit status: 0 success, 1 an input failed, 2 bad command line. */
     public static void main(String[] args) throws Exception {
+        int status = run(args);
+        if (status != 0) System.exit(status);
+    }
+
+    /** Integer option value, or null after printing why it is not one. */
+    static Integer intArg(String name, String v, int min) {
+        try {
+            int n = Integer.parseInt(v);
+            if (n >= min) return n;
+        } catch (NumberFormatException e) { /* reported below */ }
+        System.err.println("Invalid " + name + "=" + v + " (expected an integer >= " + min + ")");
+        return null;
+    }
+
+    static int run(String[] args) throws Exception {
         java.util.List<String[]> inputs = new java.util.ArrayList<>();
         String output = null, csvPath = null;
         boolean showTime = false;
         Options opts = new Options();
         for (String a : args) {
+            Integer v = 0;
             if (a.startsWith("--mode=")) opts.mode = a.substring(7);
-            else if (a.startsWith("--size=")) opts.size = Integer.parseInt(a.substring(7));
-            else if (a.startsWith("--weight=")) opts.weight = Integer.parseInt(a.substring(9));
-            else if (a.startsWith("--threshold-offset=")) opts.thresholdOffset = Integer.parseInt(a.substring(19));
+            else if (a.equals("--size=auto")) opts.size = AUTO;
+            else if (a.startsWith("--size=")) { if ((v = intArg("--size", a.substring(7), 2)) != null) opts.size = v; }
+            else if (a.startsWith("--weight=")) { if ((v = intArg("--weight", a.substring(9), 1)) != null) opts.weight = v; }
+            else if (a.startsWith("--threshold-offset=")) {
+                if ((v = intArg("--threshold-offset", a.substring(19), Integer.MIN_VALUE)) != null) opts.thresholdOffset = v;
+            }
             else if (a.startsWith("--output=")) output = a.substring(9);
             else if (a.equals("--no-upsample")) opts.upsample = false;
             else if (a.equals("--time")) showTime = true;
             else if (a.startsWith("--csv=")) csvPath = a.substring(6);
+            else if (a.equals("--version")) {
+                System.out.println("ZigZag " + VERSION);
+                return 0;
+            }
             else if (a.equals("--help") || a.equals("-h")) {
                 System.out.println(USAGE);
-                return;
+                return 0;
             }
             else if (a.startsWith("--")) {
-                System.out.println("Unknown option: " + a);
-                return;
+                System.err.println("Unknown option: " + a);
+                return 2;
             }
             else inputs.addAll(expand(a));
+            if (v == null) return 2;
         }
         if (!MODES.contains(opts.mode)) {
-            System.out.println("Invalid --mode=" + opts.mode + " (expected binary, gray or color)");
-            return;
+            System.err.println("Invalid --mode=" + opts.mode + " (expected binary, gray or color)");
+            return 2;
         }
         if (inputs.isEmpty()) {
             boolean hadPatterns = java.util.Arrays.stream(args).anyMatch(a -> !a.startsWith("--"));
-            System.out.println(hadPatterns ? "No input images found." : USAGE);
-            return;
+            System.err.println(hadPatterns ? "No input images found." : USAGE);
+            return hadPatterns ? 1 : 2;
         }
 
         File outDir = null;
@@ -401,18 +461,20 @@ public class ZigZag {
                 "input,output,mode,size,weight,otsu,threshold,backend,in_width,in_height,"
                 + "out_width,out_height,load_ms,proc_ms,save_ms\n");
         double totLoad = 0, totProc = 0, totSave = 0;
-        int count = 0;
+        int count = 0, failed = 0;
         for (String[] entry : inputs) {
             String input = entry[0], rel = entry[1];
             File in = new File(input);
             if (!in.exists()) {
-                System.out.println("File not found: " + input);
+                System.err.println("File not found: " + input);
+                failed++;
                 continue;
             }
             long t0 = System.nanoTime();
             BufferedImage img = ImageIO.read(in);
             if (img == null) {
-                System.out.println("Cannot read image: " + input);
+                System.err.println("Cannot read image: " + input);
+                failed++;
                 continue;
             }
             double tLoad = (System.nanoTime() - t0) / 1e6;
@@ -442,13 +504,14 @@ public class ZigZag {
                     csvField(input), csvField(dst.getPath()), opts.mode, f.size, f.weight,
                     f.otsu, f.threshold, img.getWidth(), img.getHeight(),
                     res.image.getWidth(), res.image.getHeight(), tLoad, tProc, tSave));
+            String sizeS = f.autoSize ? f.size + " (auto)" : String.valueOf(f.size);
             String otsuS = f.threshold != f.otsu
                     ? " thr=" + f.threshold + " (otsu=" + f.otsu + ")" : " otsu=" + f.otsu;
             String timing = showTime
                     ? String.format(Locale.ROOT, "load %.0f | proc %.0f | save %.0f ms", tLoad, tProc, tSave)
                     : String.format(Locale.ROOT, "%.0f ms", tProc);
-            System.out.printf(Locale.ROOT, "%s -> %s  [size=%d weight=%d%s | %s]%n",
-                    input, dst, f.size, f.weight, otsuS, timing);
+            System.out.printf(Locale.ROOT, "%s -> %s  [size=%s weight=%d%s | %s]%n",
+                    input, dst, sizeS, f.weight, otsuS, timing);
         }
         if (csvPath != null && count > 0) {
             java.nio.file.Files.writeString(java.nio.file.Paths.get(csvPath), csv.toString());
@@ -459,6 +522,7 @@ public class ZigZag {
                     "-- %d images | load %.2f s | proc %.2f s (%.0f ms/image) | save %.2f s%n",
                     count, totLoad / 1000, totProc / 1000, totProc / count, totSave / 1000);
         }
+        return failed > 0 ? 1 : 0;
     }
 
     /** Quote a CSV field if it contains a comma or a quote. */
@@ -475,26 +539,38 @@ public class ZigZag {
             return java.util.List.<String[]>of(new String[]{ pattern, new File(pattern).getName() });
         }
         java.util.List<String[]> out = new java.util.ArrayList<>();
-        if (pattern.contains("**")) {
-            int wc = pattern.indexOf('*');
-            int q = pattern.indexOf('?');
-            if (q >= 0 && q < wc) wc = q;
-            int slash = Math.max(pattern.lastIndexOf('/', wc), pattern.lastIndexOf('\\', wc));
+        int wc = pattern.indexOf('*');
+        int q = pattern.indexOf('?');
+        if (wc < 0 || (q >= 0 && q < wc)) wc = q;
+        int slash = Math.max(pattern.lastIndexOf('/', wc), pattern.lastIndexOf('\\', wc));
+        boolean wildDir = pattern.indexOf('/', wc) >= 0 || pattern.indexOf('\\', wc) >= 0;
+        if (wildDir) {     // ** or a wildcard in a directory name ("scans/*/p*.jpg")
             java.nio.file.Path root = java.nio.file.Paths.get(slash >= 0 ? pattern.substring(0, slash) : ".");
+            // without **, the walk never needs to go deeper than the pattern
+            int depth = Integer.MAX_VALUE;
+            if (!pattern.contains("**")) {
+                depth = 0;
+                for (char c : pattern.substring(slash + 1).toCharArray()) if (c == '/' || c == '\\') depth++;
+                depth++;
+            }
             // Java's glob requires ** to span at least one directory; Python's
             // recursive glob lets it span zero, so also try the collapsed form
             var deep = java.nio.file.FileSystems.getDefault().getPathMatcher("glob:" + pattern);
             var flat = java.nio.file.FileSystems.getDefault()
-                    .getPathMatcher("glob:" + pattern.replace("/**/", "/").replace("\\**\\", "\\"));
-            try (var st = java.nio.file.Files.walk(root)) {
+                    .getPathMatcher("glob:" + pattern.replace("/**/", "/").replace("\\**\\", "\\")
+                            .replaceFirst("^\\*\\*[/\\\\]", ""));   // leading **/ too
+            if (!java.nio.file.Files.isDirectory(root)) return out;
+            java.nio.file.Path base = root.normalize();     // "." -> "", so rel has no "../"
+            try (var st = java.nio.file.Files.walk(root, depth)) {
                 st.filter(java.nio.file.Files::isRegularFile)
                   .map(java.nio.file.Path::normalize)
                   .filter(f -> deep.matches(f) || flat.matches(f))
-                  .forEach(f -> out.add(new String[]{ f.toString(), root.relativize(f).toString() }));
+                  .forEach(f -> out.add(new String[]{ f.toString(), base.relativize(f).toString() }));
             }
         } else {
             java.nio.file.Path p = java.nio.file.Paths.get(pattern);
             java.nio.file.Path dir = p.getParent() == null ? java.nio.file.Paths.get(".") : p.getParent();
+            if (!java.nio.file.Files.isDirectory(dir)) return out;
             try (var ds = java.nio.file.Files.newDirectoryStream(dir, p.getFileName().toString())) {
                 for (java.nio.file.Path f : ds) out.add(new String[]{ f.toString(), f.getFileName().toString() });
             }
