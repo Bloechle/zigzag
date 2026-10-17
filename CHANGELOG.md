@@ -2,6 +2,17 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.0 — 2026-10-17
+
+**Same output as 1.2, bit for bit — faster.** The Java port now needs JDK 25+ and the Vector API (`java --add-modules jdk.incubator.vector ZigZag.java …`).
+
+- All ports: the box sums run on bytes in, integers out (gray levels and 0/1 flags have integer sums, exact in any order), a fraction of the memory traffic of float64. A window is now at most 2048 px, which keeps them inside an int32.
+- Java: Vector API kernels for Pass A, Pass B, the 2× binarization and the gray/color coverage, bit-identical (same operations lane by lane, no fused multiply-add); they switch on with 256-bit vectors or wider, the scalar loops run elsewhere. Gray computed straight from the JPEG raster bytes; the box sums share their scratch buffers; the color output is written to the raster directly.
+- Java and JS: the despeckle unites runs of ink instead of pixels — the same components, about 1.7× faster on a text page.
+- Python: the 2× samples are computed only around the ink: away from it every sample is provably paper (the threshold is an integer and the 0.25 / 0.75 weights keep it exact).
+- 5.6 MP photo, binary output, two cores: Python 0.79 → 0.53 s, JS 0.60 → 0.35 s, Java 0.23 → 0.12 s (JDK 25 for both).
+- CI: JDK 25; the parity gate runs a second time with AVX disabled, so the Java scalar fallback is proven identical too.
+
 ## 1.2.0 — 2026-10-17
 
 **Default output changed.** A despeckle runs after thresholding: 8-connected ink components smaller than `round(size² / 225)` pixels become paper — 4 px at size 30, 26 at 77. It removes the salt-and-pepper grain of dark, noisy photos, ZigZag's main weakness, at no visible cost elsewhere. To reproduce 1.1 results exactly, turn it off (`-d 0`, `--despeckle=0`, `despeckle: 0`); 1.0 results need a fixed size of 30 as well.

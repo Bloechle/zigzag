@@ -2,7 +2,7 @@
 
 # ZigZag
 
-**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built on running box sums, it is fast, accurate and simple: a few hundred milliseconds for a phone photo on a CPU.
+**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built on running box sums, it is fast, accurate and simple: a 5.6 MP phone photo takes about 0.12 s in Java, 0.35 s in JavaScript and 0.5 s in Python on two CPU cores.
 
 **[▶ Try the live demo](https://bloechle.github.io/zigzag/)** — runs entirely in your browser, no upload.
 
@@ -13,7 +13,7 @@
 | File / folder | Content |
 |---|---|
 | [`ports/zigzag.py`](ports/zigzag.py) | Reference implementation — single file, CPU/GPU backends, full CLI |
-| [`ports/ZigZag.java`](ports/ZigZag.java) | Java implementation — single file, multi-threaded, same CLI |
+| [`ports/ZigZag.java`](ports/ZigZag.java) | Java implementation — single file, multi-threaded, SIMD (Vector API), same CLI |
 | [`js/zigzag.js`](js/zigzag.js) | Browser implementation — dependency-free ES module |
 | [`js/zigzag-gpu.js`](js/zigzag-gpu.js) | Optional WebGPU accelerator — same pipeline as WGSL compute shaders |
 | [`js/zigzag-worker.js`](js/zigzag-worker.js) | Runs the CPU port off the main thread for the web app |
@@ -39,7 +39,7 @@ ZigZag is a two-pass local mean filter. **Pass A** classifies likely background 
 
 Output modes: `binary` (thresholded, 2× upsampled by default for detail preservation), `gray` (normalized foreground; the background, at or above the Otsu threshold, is cleaned to pure white — the cutoff is thresholded at 2× and averaged back, i.e. antialiased for free), `color` (same antialiased cleanup, with the original colors re-applied to the foreground — luminance-guided, hue-preserving).
 
-The three ports share the same float64 arithmetic and produce **bit-identical outputs** across languages, using separable running box sums in O(n). This is not a claim but a test: [`tools/parity.py`](tools/parity.py) runs all three over a matrix of images (colour, grayscale, RGBA, 16-bit, an A4-sized page, a page sown with specks of every size, and degenerate 1-pixel-wide cases), modes and parameters — automatic and fixed sizes, despeckle automatic, explicit and off, 2× and 1× binary output — and compares every pixel. It also checks that the automatic size rule returns the same integer in every port over some ten thousand image dimensions, chosen around the clamps and where the diagonal falls closest to a rounding boundary. The JS port is fed pixels already decoded by OpenCV, since in the browser the canvas does the decoding: for JS the harness proves the computation, not the decoder.
+The three ports share the same float64 arithmetic and produce **bit-identical outputs** across languages, using separable running box sums in O(n). The box sums run on integers (gray levels and flags in, int32 sums out), exact whatever the order of the additions. This is not a claim but a test: [`tools/parity.py`](tools/parity.py) runs all three over a matrix of images (colour, grayscale, RGBA, 16-bit, an A4-sized page, a page sown with specks of every size, and degenerate 1-pixel-wide cases), modes and parameters — automatic and fixed sizes, despeckle automatic, explicit and off, 2× and 1× binary output — and compares every pixel. It also checks that the automatic size rule returns the same integer in every port over some ten thousand image dimensions, chosen around the clamps and where the diagonal falls closest to a rounding boundary. The JS port is fed pixels already decoded by OpenCV, since in the browser the canvas does the decoding: for JS the harness proves the computation, not the decoder.
 
 ```sh
 python tools/parity.py     # 468 comparisons — any divergence is a bug
@@ -76,16 +76,18 @@ python ports/zigzag.py -b cpu photo.jpg             # force a backend (auto|gpu|
 
 ## Java
 
-One file, no dependencies, multi-threaded across all cores. Works on **Java 11+** and runs directly — no compilation step. The same file runs unmodified on every newer JDK, and faster: JDK 25 ran about 25 % faster than JDK 21 on identical bytecode when measured on a single core, the JIT vectorizing the pixel loops better — use the latest JDK you have. It deliberately sticks to stable APIs — no incubator modules (e.g. the Vector API) — so the flag-free launch below always works:
+One file, no dependencies, multi-threaded across all cores, and the fastest port. It needs **Java 25+** and runs directly — no compilation step. Its division-bound loops (the two passes) and the 2× output run on the **Vector API**, which is still an incubator module, so the launch names it and the JVM prints a one-line notice saying so:
 
 ```sh
-java ports/ZigZag.java photo.jpg                    # binary, automatic size and despeckle
-java ports/ZigZag.java photo.jpg --mode=color       # color foreground
-java ports/ZigZag.java score.png --despeckle=0 --output=clean.png
-java ports/ZigZag.java *.jpg --output=cleaned/ --time
+java --add-modules jdk.incubator.vector ports/ZigZag.java photo.jpg                 # binary, automatic size and despeckle
+java --add-modules jdk.incubator.vector ports/ZigZag.java photo.jpg --mode=color    # color foreground
+java --add-modules jdk.incubator.vector ports/ZigZag.java score.png --despeckle=0 --output=clean.png
+java --add-modules jdk.incubator.vector ports/ZigZag.java *.jpg --output=cleaned/ --time
 ```
 
-Options: `--mode=binary|gray|color` · `--size=N|auto` · `--weight=N` · `--despeckle=N|auto` · `--threshold-offset=N` · `--output=path|dir` · `--no-upsample` · `--time` (separate load / process / save timings plus a batch summary) · `--csv=path` (per-image metrics as CSV, same columns as the Python CLI) · `--version`. Accepts multiple inputs; `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows), in file and folder names alike — e.g. `"scans/**/*.jpg"` or `"scans/*/page*.jpg"`, whose folder tree is mirrored under the output directory. Exit status as for the Python CLI.
+The vector code runs the scalar code's operations lane by lane, in the same order and without fused multiply-adds, so the output is bit-identical with or without it. It switches on with 256-bit vectors or wider (AVX2, AVX-512); on narrower hardware, such as ARM NEON, where the incubator API is slower than plain loops, the scalar code does the work.
+
+Options: `--mode=binary|gray|color` · `--size=N|auto` (up to 2048) · `--weight=N` · `--despeckle=N|auto` · `--threshold-offset=N` · `--output=path|dir` · `--no-upsample` · `--time` (separate load / process / save timings plus a batch summary) · `--csv=path` (per-image metrics as CSV, same columns as the Python CLI) · `--version`. Accepts multiple inputs; `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows), in file and folder names alike — e.g. `"scans/**/*.jpg"` or `"scans/*/page*.jpg"`, whose folder tree is mirrored under the output directory. Exit status as for the Python CLI.
 
 ### API
 
@@ -151,7 +153,7 @@ The three ports carry the same version number (`zigzag.__version__`, `ZigZag.VER
 
 ## Development
 
-Two gates, both in CI. Any change to a port must keep [`tools/parity.py`](tools/parity.py) green; it needs NumPy, OpenCV, a JDK 11+ and Node 18+. Any change to the web app or the browser ports must keep [`tools/app_check.py`](tools/app_check.py) green; it needs Playwright (`pip install playwright && python -m playwright install chromium`). The web app is published by GitHub Pages straight from `main`, so run the app check before pushing, not after. Its service worker serves from cache first, so a release must also bump `CACHE` in [`sw.js`](sw.js), or installed copies keep the previous version.
+Two gates, both in CI. Any change to a port must keep [`tools/parity.py`](tools/parity.py) green; it needs NumPy, OpenCV, a JDK 25+ and Node 18+, and CI runs it twice, with the Java vector code on and with AVX disabled so the scalar fallback is checked too. Any change to the web app or the browser ports must keep [`tools/app_check.py`](tools/app_check.py) green; it needs Playwright (`pip install playwright && python -m playwright install chromium`). The web app is published by GitHub Pages straight from `main`, so run the app check before pushing, not after. Its service worker serves from cache first, so a release must also bump `CACHE` in [`sw.js`](sw.js), or installed copies keep the previous version.
 
 ## Citation
 

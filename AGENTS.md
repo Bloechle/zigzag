@@ -13,7 +13,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 | Path | What |
 |---|---|
 | `ports/zigzag.py` | Reference port: NumPy + OpenCV, optional CuPy GPU backend, CLI |
-| `ports/ZigZag.java` | Java 11+ port, single file, multi-threaded, same CLI |
+| `ports/ZigZag.java` | Java 25+ port, single file, multi-threaded, Vector API (`--add-modules jdk.incubator.vector`), same CLI |
 | `js/zigzag.js` | Browser/Node port, dependency-free ES module; owns option resolution, Otsu and despeckle for the browser |
 | `js/zigzag-gpu.js` | WebGPU accelerator (WGSL, float32); imports those from `zigzag.js` |
 | `js/zigzag-worker.js` | Runs `zigzag.js` off the main thread |
@@ -40,7 +40,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 
 ```sh
 pip install numpy opencv-python-headless playwright && python -m playwright install chromium
-python tools/parity.py       # needs a JDK 11+ and Node 18+
+python tools/parity.py       # needs a JDK 25+ and Node 18+
 python tools/app_check.py
 ```
 

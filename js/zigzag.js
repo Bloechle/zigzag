@@ -21,12 +21,15 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
 const BLACK = new Uint32Array(new Uint8ClampedArray([0, 0, 0, 255]).buffer)[0];
 const OTSU_CAP = 250;
+/** Largest window: keeps 255 * (size + 1)^2 inside the Int32 box sums
+ *  (the automatic size stops at 250). */
+const MAX_SIZE = 2048;
 const MODES = ['binary', 'gray', 'color'];
 /** size and despeckle: null (or 'auto') = the automatic rules below. */
 const DEFAULTS = Object.freeze({
@@ -62,7 +65,9 @@ function resolveOptions(opts, w, h) {
     }
     const auto = o.size == null;
     if (auto) o.size = autoSize(w, h);
-    if (!Number.isInteger(o.size) || o.size < 2) throw new RangeError(`invalid size: ${o.size} (expected an integer >= 2)`);
+    if (!Number.isInteger(o.size) || o.size < 2 || o.size > MAX_SIZE) {
+        throw new RangeError(`invalid size: ${o.size} (expected an integer 2..${MAX_SIZE})`);
+    }
     if (!(o.weight > 0)) throw new RangeError(`invalid weight: ${o.weight} (expected > 0)`);
     if (o.despeckle == null) o.despeckle = autoDespeckle(o.size);
     if (!Number.isInteger(o.despeckle) || o.despeckle < 0) {
@@ -73,12 +78,16 @@ function resolveOptions(opts, w, h) {
 
 /**
  * Turn 8-connected ink components (fg < thr) smaller than minArea into paper
- * (255), in place. One raster scan with union-find; a root holds its
- * component's size as a negative number, so one int per pixel suffices.
- * Works on any numeric array (the CPU's Float64Array, the GPU's Float32Array).
+ * (255), in place. Union-find over runs: each horizontal run of ink is one
+ * node, joined to the runs of the row above that touch it (8-connectivity:
+ * overlapping once widened by a pixel); a root holds its component's size as
+ * a negative number. Components are unique, so the result is the same as any
+ * other labelling — a run per node just makes far fewer unions than a pixel
+ * per node. Works on any numeric array (the CPU's Float64Array, the GPU's
+ * Float32Array).
  */
 function despeckle(fg, w, h, thr, minArea) {
-    const parent = new Int32Array(w * h);
+    const parent = new Int32Array(w * h);   // at a run's first pixel: parent run, or -size
     const find = i => {
         while (parent[i] >= 0) {
             const p = parent[i];
@@ -94,22 +103,33 @@ function despeckle(fg, w, h, thr, minArea) {
         parent[ra] += parent[rb];
         parent[rb] = ra;
     };
+    let above = { start: new Int32Array(w), end: new Int32Array(w), n: 0 };
+    let row = { start: new Int32Array(w), end: new Int32Array(w), n: 0 };
     for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-            const i = y * w + x;
-            if (fg[i] >= thr) continue;
-            parent[i] = -1;
-            if (x > 0 && fg[i - 1] < thr) union(i, i - 1);
-            if (y > 0) {
-                const up = i - w;
-                if (x > 0 && fg[up - 1] < thr) union(i, up - 1);
-                if (fg[up] < thr) union(i, up);
-                if (x < w - 1 && fg[up + 1] < thr) union(i, up + 1);
+        const base = y * w;
+        row.n = 0;
+        for (let x = 0, k = 0; x < w;) {
+            if (fg[base + x] >= thr) { x++; continue; }
+            const s = x;
+            while (x < w && fg[base + x] < thr) x++;
+            parent[base + s] = s - x;                       // a run of x - s pixels
+            row.start[row.n] = s;
+            row.end[row.n++] = x;
+            while (k < above.n && above.end[k] < s) k++;    // ends left of column s - 1
+            for (let j = k; j < above.n && above.start[j] <= x; j++) {
+                union(base + s, base - w + above.start[j]);
             }
         }
+        [above, row] = [row, above];
     }
-    for (let i = 0; i < w * h; i++) {
-        if (fg[i] < thr && -parent[find(i)] < minArea) fg[i] = 255;
+    for (let y = 0; y < h; y++) {
+        const base = y * w;
+        for (let x = 0; x < w;) {
+            if (fg[base + x] >= thr) { x++; continue; }
+            const s = x;
+            while (x < w && fg[base + x] < thr) x++;
+            if (-parent[find(base + s)] < minArea) fg.fill(255, base + s, base + x);
+        }
     }
 }
 
@@ -117,9 +137,9 @@ class ZigZag {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /** Rec. 601 luma, round-half-up. RGBA bytes → Float64Array. */
+    /** Rec. 601 luma, round-half-up. RGBA bytes → one byte per pixel. */
     static grayImage(rgba, w, h) {
-        const gray = new Float64Array(w * h);
+        const gray = new Uint8Array(w * h);
         for (let i = 0; i < w * h; i++) {
             const o = i * 4;
             gray[i] = Math.floor(rgba[o] * 0.299 + rgba[o + 1] * 0.587 + rgba[o + 2] * 0.114 + 0.5);
@@ -129,8 +149,7 @@ class ZigZag {
 
     /** Horizontal rolling sum over [x-r..x+r], zero-padded (truncated window).
      *  The x loop is split where the window enters and leaves the row, so the
-     *  inner loops carry no bounds tests; each x still adds, then removes, in
-     *  the same order as the single-loop form. */
+     *  inner loops carry no bounds tests; `| 0` keeps the sum an int32. */
     static #hsum(src, dst, w, h, r) {
         const initR = Math.min(r, w - 1);
         const addEnd = Math.max(1, w - r);      // x < addEnd  <=>  x + r < w
@@ -138,56 +157,52 @@ class ZigZag {
         for (let y = 0; y < h; y++) {
             const base = y * w;
             let sum = 0;
-            for (let x = 0; x <= initR; x++) sum += src[base + x];
+            for (let x = 0; x <= initR; x++) sum = (sum + src[base + x]) | 0;
             dst[base] = sum;
             let x = 1;
             for (const end = Math.min(addEnd, remBeg); x < end; x++) {       // add only
-                sum += src[base + x + r];
+                sum = (sum + src[base + x + r]) | 0;
                 dst[base + x] = sum;
             }
             for (; x < addEnd; x++) {                                        // add and remove
-                sum += src[base + x + r];
-                sum -= src[base + x - r - 1];
+                sum = (sum + src[base + x + r] - src[base + x - r - 1]) | 0;
                 dst[base + x] = sum;
             }
             for (; x < remBeg && x < w; x++) dst[base + x] = sum;            // neither
             for (; x < w; x++) {                                             // remove only
-                sum -= src[base + x - r - 1];
+                sum = (sum - src[base + x - r - 1]) | 0;
                 dst[base + x] = sum;
             }
         }
     }
 
     /** Vertical rolling sum over [y-r..y+r], zero-padded (truncated window).
-     *  Walks the image row by row with one running sum per column: the same
-     *  additions in the same order as a column-wise loop (bit-identical), but
-     *  with sequential memory access — about 4x faster on large images. */
+     *  Row y is row y-1 plus the row entering the window minus the row
+     *  leaving it, so memory is read row by row, sequentially. */
     static #vsum(src, dst, w, h, r) {
-        const acc = new Float64Array(w);
         const initB = Math.min(r, h - 1);
         for (let y = 0; y <= initB; y++) {
             const b = y * w;
-            for (let x = 0; x < w; x++) acc[x] += src[b + x];
+            for (let x = 0; x < w; x++) dst[x] += src[b + x];
         }
-        dst.set(acc, 0);
         for (let y = 1; y < h; y++) {
-            const add = y + r, rem = y - r - 1;
-            if (add < h) {
-                const b = add * w;
-                for (let x = 0; x < w; x++) acc[x] += src[b + x];
-            }
-            if (rem >= 0) {
-                const b = rem * w;
-                for (let x = 0; x < w; x++) acc[x] -= src[b + x];
-            }
-            dst.set(acc, y * w);
+            const o = y * w, p = o - w;
+            const add = y + r < h ? (y + r) * w : -1;
+            const rem = y - r - 1 >= 0 ? (y - r - 1) * w : -1;
+            if (add >= 0 && rem >= 0) for (let x = 0; x < w; x++) dst[o + x] = dst[p + x] + src[add + x] - src[rem + x];
+            else if (add >= 0) for (let x = 0; x < w; x++) dst[o + x] = dst[p + x] + src[add + x];
+            else if (rem >= 0) for (let x = 0; x < w; x++) dst[o + x] = dst[p + x] - src[rem + x];
+            else dst.copyWithin(o, p, o);
         }
     }
 
-    /** 2D box sum (horizontal then vertical pass). */
+    /** 2D box sum (horizontal then vertical pass). The inputs are bytes (gray
+     *  levels, 0/1 flags) and the sums integers: exact in any order, half the
+     *  memory of doubles, and equal to what a floating-point sum would give.
+     *  Bounded by 255 * (2r + 1)^2, which MAX_SIZE keeps inside an Int32. */
     static boxSum(src, w, h, r) {
-        const tmp = new Float64Array(w * h);
-        const dst = new Float64Array(w * h);
+        const tmp = new Int32Array(w * h);
+        const dst = new Int32Array(w * h);
         ZigZag.#hsum(src, tmp, w, h, r);
         ZigZag.#vsum(tmp, dst, w, h, r);
         return dst;
@@ -303,14 +318,14 @@ class ZigZag {
 
         // Pass A — background classification against the weighted local mean
         let sumAll = ZigZag.boxSum(gray, w, h, r);
-        const maskVal = new Float64Array(n);   // gray value where background, else 0
-        const maskCnt = new Float64Array(n);   // 1 where background, else 0
+        const maskVal = new Uint8Array(n);     // gray value where background, else 0
+        const maskCnt = new Uint8Array(n);     // 1 where background, else 0
+        const cols = new Int32Array(w);        // pixels of the clamped window, per column
+        for (let x = 0; x < w; x++) cols[x] = Math.min(w - 1, x + r) - Math.max(0, x - r) + 1;
         for (let y = 0; y < h; y++) {
             const cy = Math.min(h - 1, y + r) - Math.max(0, y - r) + 1;
-            for (let x = 0; x < w; x++) {
-                const i = y * w + x;
-                const cx = Math.min(w - 1, x + r) - Math.max(0, x - r) + 1;
-                if (gray[i] >= wf * sumAll[i] / (cx * cy)) {
+            for (let x = 0, i = y * w; x < w; x++, i++) {
+                if (gray[i] >= wf * sumAll[i] / (cols[x] * cy)) {
                     maskVal[i] = gray[i];
                     maskCnt[i] = 1;
                 }
@@ -322,20 +337,15 @@ class ZigZag {
         // Pass B — normalization against the local mean of background-only pixels
         const cntBg = ZigZag.boxSum(maskCnt, w, h, r);
 
-        const normalize = (channel, masked) => {
-            const sumBg = ZigZag.boxSum(masked, w, h, r);
-            const fg = new Float64Array(n);
-            for (let i = 0; i < n; i++) {
-                const meanBg = cntBg[i] > 0.5 ? sumBg[i] / cntBg[i] : 0;
-                const v = channel[i];
-                fg[i] = (v >= meanBg || cntBg[i] < 0.5)
-                    ? 255
-                    : Math.min(255, v * 256 / Math.max(1, meanBg));
-            }
-            return fg;
-        };
-
-        const fg = normalize(gray, maskVal);
+        // fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows → 255
+        const sumBg = ZigZag.boxSum(maskVal, w, h, r);
+        const fg = new Float64Array(n);
+        for (let i = 0; i < n; i++) {
+            const cnt = cntBg[i];
+            const meanBg = cnt > 0 ? sumBg[i] / cnt : 0;
+            const v = gray[i];
+            fg[i] = (v >= meanBg || cnt === 0) ? 255 : Math.min(255, v * 256 / Math.max(1, meanBg));
+        }
 
         // Otsu threshold on the foreground histogram (10% margin crop),
         // optionally shifted by the manual offset

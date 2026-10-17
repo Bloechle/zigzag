@@ -44,9 +44,10 @@ except Exception:
     cp = None
     HAS_GPU = False
 
-__version__ = '1.2.0'
+__version__ = '1.3.0'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
+MAX_SIZE = 2048     # keeps 255 * (size + 1)² inside the int32 box sums of the other ports
 
 
 def auto_size(w, h):
@@ -73,9 +74,11 @@ def to_gray(rgb, xp=np):
 
 
 def box_sum_cv(src, r):
-    """CPU: windowed sum over [x-r..x+r]^2, zero-padded (OpenCV separable filter)."""
+    """CPU: windowed sum over [x-r..x+r]^2, zero-padded (OpenCV separable filter).
+    src is uint8 (gray levels, 0/1 flags): integer sums, exact, half the time of
+    float64 ones and equal to them."""
     side = 2 * r + 1
-    return cv2.boxFilter(src, cv2.CV_64F, (side, side), normalize=False,
+    return cv2.boxFilter(src, cv2.CV_32S, (side, side), normalize=False,
                          borderType=cv2.BORDER_CONSTANT)
 
 
@@ -85,7 +88,7 @@ def box_sum_integral(src, r, xp=np):
     bit for bit."""
     h, w = src.shape
     ii = xp.zeros((h + 1, w + 1), dtype=xp.float64)
-    ii[1:, 1:] = src.cumsum(axis=0).cumsum(axis=1)
+    ii[1:, 1:] = src.astype(xp.float64).cumsum(axis=0).cumsum(axis=1)
     ys = xp.arange(h)
     xs = xp.arange(w)
     y1 = xp.maximum(ys - r, 0)
@@ -133,23 +136,34 @@ def _neighbor(a, axis, step, xp=np):
     return xp.concatenate([a[:, :1], a[:, :-1]] if step < 0 else [a[:, 1:], a[:, -1:]], axis=1)
 
 
-def upsample_phases(src, xp=np):
-    """Center-aligned 2x bilinear upsampling, returned as its four phases.
+def upsample_near_ink(fg, thr, xp=np):
+    """Center-aligned 2x bilinear upsampling of fg, computed only where it can
+    fall below thr. Returns (ys, xs, tl, tr, bl, br): output pixel
+    (2y+i, 2x+j) of source pixel (ys[k], xs[k]) is tl/tr/bl/br[k] for
+    (i, j) = (0,0)/(0,1)/(1,0)/(1,1); every other 2x sample is >= thr.
 
-    At exactly 2x every output sample sits at -0.25 / +0.25 of a source pixel,
-    so the weights are the constants 0.25 / 0.75. Output pixel (2y+i, 2x+j) is
-    phase [i][j][y, x]: tl (0,0), tr (0,1), bl (1,0), br (1,1). Each phase is
-    source-sized, so the 2x image is never held in float64. The products are
-    those of the general form a*(1-f) + b*f, vertical pass first, in the same
-    order as the Java and JS ports — bit-identical.
+    At exactly 2x every sample sits at -0.25 / +0.25 of a source pixel, so the
+    weights are the constants 0.25 / 0.75 and a sample only reads the 3x3
+    neighbourhood. When those nine values are all >= thr (an integer), the
+    sample is too: T/4 and 3T/4 are exact, and rounding is monotonic. Paper
+    therefore needs no arithmetic; around the ink the products are those of
+    a*(1-f) + b*f, vertical pass first, as in the Java and JS ports.
     """
-    a = _neighbor(src, 0, -1, xp) * 0.25 + src * 0.75     # rows 2y   (sy = y - 0.25)
-    b = src * 0.75 + _neighbor(src, 0, 1, xp) * 0.25      # rows 2y+1 (sy = y + 0.25)
-    tl = _neighbor(a, 1, -1, xp) * 0.25 + a * 0.75
-    tr = a * 0.75 + _neighbor(a, 1, 1, xp) * 0.25
-    bl = _neighbor(b, 1, -1, xp) * 0.25 + b * 0.75
-    br = b * 0.75 + _neighbor(b, 1, 1, xp) * 0.25
-    return tl, tr, bl, br
+    h, w = fg.shape
+    ink = fg < thr
+    rows = ink | _neighbor(ink, 0, -1, xp) | _neighbor(ink, 0, 1, xp)
+    near = rows | _neighbor(rows, 1, -1, xp) | _neighbor(rows, 1, 1, xp)
+    ys, xs = xp.nonzero(near)
+    ym, yp = xp.maximum(ys - 1, 0), xp.minimum(ys + 1, h - 1)
+    xm, xq = xp.maximum(xs - 1, 0), xp.minimum(xs + 1, w - 1)
+
+    def column(x):            # rows 2y and 2y+1 of the vertical pass, at column x
+        c = fg[ys, x]
+        return fg[ym, x] * 0.25 + c * 0.75, c * 0.75 + fg[yp, x] * 0.25
+
+    (am, bm), (a0, b0), (ap, bp) = column(xm), column(xs), column(xq)
+    return (ys, xs, am * 0.25 + a0 * 0.75, a0 * 0.75 + ap * 0.25,
+            bm * 0.25 + b0 * 0.75, b0 * 0.75 + bp * 0.25)
 
 
 def despeckle_mask(ink, min_area):
@@ -181,8 +195,8 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     auto = size is None or size == 'auto'
     if auto:
         size = auto_size(rgb.shape[1], rgb.shape[0])
-    if int(size) != size or size < 2:
-        raise ValueError(f"invalid size: {size!r} (expected an integer >= 2)")
+    if int(size) != size or not 2 <= size <= MAX_SIZE:
+        raise ValueError(f"invalid size: {size!r} (expected an integer 2..{MAX_SIZE})")
     if not weight > 0:
         raise ValueError(f"invalid weight: {weight!r} (expected > 0)")
     size = int(size)
@@ -206,17 +220,19 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     r = size // 2
     wf = weight / 100.0
 
+    gray8 = gray.astype(xp.uint8)         # the box sums take bytes, return integers
+
     # Pass A — background classification against the weighted local mean
-    sum_all = box(gray, r)
+    sum_all = box(gray8, r)
     cnt_all = window_counts(w, h, r, xp)
     mask = gray >= wf * sum_all / cnt_all
     del sum_all, cnt_all          # released before Pass B allocates its own sums
 
     # Pass B — normalization against the local mean of background-only pixels
-    cnt_bg = box(mask.astype(xp.float64), r)
+    cnt_bg = box(mask.astype(xp.uint8), r)
 
     # fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows → 255
-    mean_bg = box(gray * mask, r) / xp.maximum(cnt_bg, 1.0)
+    mean_bg = box(gray8 * mask, r) / xp.maximum(cnt_bg, 1.0)
     fg = xp.where((gray >= mean_bg) | (cnt_bg < 0.5), 255.0,
                   xp.minimum(255.0, gray * 256.0 / xp.maximum(1.0, mean_bg)))
     del mean_bg
@@ -244,9 +260,10 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
         # antialiased background cleanup: threshold the 2x-upsampled foreground,
         # then average each 2x2 block back to 1x (coverage in {0, .25, .5, .75, 1})
         # and blend toward white — free antialiasing at the cutoff, sharp text
-        tl, tr, bl, br = upsample_phases(fg, xp)
-        cov = ((tl >= thr).astype(xp.float64) + (tr >= thr) + (bl >= thr) + (br >= thr)) * 0.25
-        del tl, tr, bl, br
+        ys, xs, tl, tr, bl, br = upsample_near_ink(fg, thr, xp)
+        cov = xp.ones((h, w), dtype=xp.float64)
+        cov[ys, xs] = ((tl >= thr).astype(xp.float64) + (tr >= thr) + (bl >= thr) + (br >= thr)) * 0.25
+        del ys, xs, tl, tr, bl, br
 
         if mode == 'gray':
             out = cov * 255.0 + (1.0 - cov) * fg
@@ -260,9 +277,10 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     # binary — threshold, 2x upsample by default for detail preservation
     if not upsample:
         return host(xp.where(fg >= thr, 255, 0).astype(xp.uint8)), info
-    out = xp.empty((2 * h, 2 * w), dtype=xp.uint8)
-    for (i, j), phase in zip(((0, 0), (0, 1), (1, 0), (1, 1)), upsample_phases(fg, xp)):
-        out[i::2, j::2] = xp.where(phase >= thr, 255, 0)
+    ys, xs, *phases = upsample_near_ink(fg, thr, xp)
+    out = xp.full((2 * h, 2 * w), 255, dtype=xp.uint8)
+    for (i, j), phase in zip(((0, 0), (0, 1), (1, 0), (1, 1)), phases):
+        out[2 * ys + i, 2 * xs + j] = xp.where(phase >= thr, 255, 0)
     return host(out), info
 
 

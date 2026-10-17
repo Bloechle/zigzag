@@ -16,7 +16,7 @@ decoding, so what is proven here for JS is the computation, not the decoder.
     python tools/parity.py              # all ports available on this machine
     python tools/parity.py --keep       # keep the working directory
 
-Requires numpy + opencv (always), a JDK 11+ and node 18+ (optional — a missing
+Requires numpy + opencv (always), a JDK 25+ and node 18+ (optional — a missing
 runtime is reported as skipped, not as a failure).
 """
 
@@ -117,11 +117,12 @@ def run_python(src, mode, size, weight, off, up, ds, d):
 
 
 JAVA_CP = None   # compiled once by main(); `java ZigZag.java` recompiles every call
+VECTOR = ["--add-modules", "jdk.incubator.vector"]   # the Java port uses the Vector API
 
 
 def run_java(src, mode, size, weight, off, up, ds, d):
     dst = os.path.join(d, "java.png")
-    subprocess.run(["java", "-cp", JAVA_CP, "ZigZag", src, f"--mode={mode}", f"--size={size}",
+    subprocess.run(["java", *VECTOR, "-cp", JAVA_CP, "ZigZag", src, f"--mode={mode}", f"--size={size}",
                     f"--weight={weight}", f"--threshold-offset={off}", f"--despeckle={ds}",
                     f"--output={dst}"] + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
@@ -226,7 +227,7 @@ def check_auto(runners, d):
                 f.write(AUTO_JS % JS.replace("\\", "/"))
             subprocess.run(["node", drv, src, dst], check=True, capture_output=True)
         else:
-            subprocess.run(["java", "-cp", JAVA_CP, "AutoCheck", src, dst],
+            subprocess.run(["java", *VECTOR, "-cp", JAVA_CP, "AutoCheck", src, dst],
                            check=True, capture_output=True)
         got = [int(v) for v in open(dst).read().split()]
         bad = sum(a != b for a, b in zip(ref, got)) + abs(len(ref) - len(got))
@@ -258,7 +259,8 @@ def main():
         drv = os.path.join(d, "AutoCheck.java")
         with open(drv, "w") as f:
             f.write(AUTO_JAVA)
-        subprocess.run(["javac", "-d", JAVA_CP, JAVA, drv], check=True)
+        subprocess.run(["javac", *VECTOR, "-d", JAVA_CP, JAVA, drv], check=True,
+                       capture_output=True)
     images = corpus(d)
     ref = "python"
     others = [k for k in runners if k != ref]
