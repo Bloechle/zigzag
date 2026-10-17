@@ -2,7 +2,7 @@
  * zigzag-gpu.js - optional WebGPU accelerator for ZigZag.
  *
  * Same pipeline as zigzag.js (the CPU port), executed as WGSL
- * compute shaders: typically 10-50 ms where the CPU takes ~1 s. Arithmetic
+ * compute shaders: typically 10-50 ms where the CPU takes some 0.1 s/MP. Arithmetic
  * is float32 (WebGPU has no f64), so a handful of boundary pixels may differ
  * from the CPU output by +/-1 gray level - visually identical.
  *
@@ -15,8 +15,8 @@
  * back once, cleaned, and uploaded again; the result is cached per
  * threshold and area.
  *
- * Imports zigzag.js for the Otsu threshold only, so the two backends can
- * never silently diverge on it.
+ * Imports from zigzag.js the option resolution, the Otsu threshold and the
+ * despeckle, so the two backends can never silently diverge on them.
  *
  * Copyright (c) Jean-Luc Bloechle - AGPL v3
  *
@@ -34,9 +34,9 @@
 
 import { ZigZag, resolveOptions, despeckle } from './zigzag.js';
 
-/** Largest window whose box sums stay exact in float32: (2r+1)^2 * 255 < 2^24.
+/** Largest window whose box sums stay exact in float32: r = 127, (2r+1)^2 * 255 < 2^24.
  *  The automatic size tops out at 250, well inside it. */
-const GPU_MAX_SIZE = 254;
+const GPU_MAX_SIZE = 255;
 
 // ─── Params struct (32 bytes, 16-byte aligned) ──────────────────────────────
 
@@ -610,8 +610,12 @@ export class ZigZagGPU {
      *  that is what lets the caller fall back to the CPU port. */
     async #guard(fn) {
         this.#device.pushErrorScope('validation');
-        fn();
-        const err = await this.#device.popErrorScope();
+        let err;
+        try {
+            fn();
+        } finally {
+            err = await this.#device.popErrorScope();       // closed even when fn throws
+        }
         if (err) throw new Error('WebGPU: ' + err.message);
     }
 }

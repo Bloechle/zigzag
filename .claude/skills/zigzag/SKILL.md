@@ -72,7 +72,7 @@ What it relies on:
   despeckle area in integers (Java in `long`).
 - **Integers exact in float64.** Box sums of integer samples stay exact, so OpenCV's
   separable filter, CuPy's integral image and the Java/JS running sums agree.
-- **The GPU is float32**: box sums exact up to a 254 px window (`(2r+1)² × 255 < 2²⁴`);
+- **The GPU is float32**: box sums exact up to a 255 px window (`(2r+1)² × 255 < 2²⁴`);
   divisions differ, so a handful of gray/color pixels may be off by one level.
   `tools/app_check.py` measures it (binary identical on the example; gray/color ~10⁻⁷).
   The GPU imports `resolveOptions`, Otsu and `despeckle` from `zigzag.js`: one copy.
@@ -132,11 +132,26 @@ What it relies on:
   `context.set_offline()` does not stop a service worker's own fetches: stop the server
   to test offline.
 - The app awaits nothing at load (GPU init in the background, loads await it); a failed
-  run never leaves the spinner up; an image sized for the GPU is shrunk for the CPU if
+  run never leaves the spinner up. One run at a time (`running`); a new source, a rotation
+  or New waits for it (`idle()`) before touching the GPU buffers or the worker's copy, and
+  a result for an image no longer shown is dropped — uploading mid-run destroyed the
+  buffers of the job in flight, and New mid-run left the worker's bands waiting forever
+  (`app_check.py` clicks New during a run). The worker fails its bands in flight before
+  terminating helpers, and a helper error makes it serial for good; an image sized for the GPU is shrunk for the CPU if
   the GPU fails on upload or on processing; settings saved before 1.1 with the old 30 px
   default move to Auto (`PREFS_VERSION`).
 - A browser that refuses the 2× canvas gets 1×, never a blank result.
-- f-strings with a backslash inside `{}` need Python 3.12; the CLI stays 3.8-compatible.
+- f-strings with a backslash inside `{}` need Python 3.12: keep them out of the port (CI
+  runs 3.12 only, so nothing else checks it).
+- CLI output stays ASCII (`->`, not `→`): a Windows console or a redirect in cp1252 raises
+  `UnicodeEncodeError` mid-batch. OpenCV 5's `imwrite` raises instead of returning False;
+  Java's `ImageIO.write(img, fmt, File)` prints a stack trace on a bad path, so the CLI
+  writes through its own stream. A write error fails that image, never the batch.
+- Options are validated alike in the three ports: an integer threshold offset (added in
+  `long` in Java), `auto` only for size and despeckle, empty images rejected, the size
+  bounded to 2048 when the CLI parses it.
+- The browser canvas stores premultiplied alpha, so a transparent pixel reads back as
+  black ink: `toImageData` paints white under the image.
 - Java lambdas only capture effectively-final locals: do not null an array (to free it)
   that a lambda in the same method reads.
 - The Java port must compile with `javac --release 11`: check it after any Java change
@@ -159,7 +174,7 @@ What it relies on:
 
 ## Where this stands (2026-10-17)
 
-Version 1.3.2: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
+Version 1.3.3: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
 output, faster in all ports, 1.3.1 spreads the app's CPU path over the cores, and 1.3.2
-removes the incubating Vector API (Java 11+ again). Both gates in CI. Open option: band-parallel output stage (the
+removes the incubating Vector API (Java 11+ again); 1.3.3 is an audit's fixes. Both gates in CI. Open option: band-parallel output stage (the
 serial remainder, ~134 ms binary on a 5.6 MP photo).

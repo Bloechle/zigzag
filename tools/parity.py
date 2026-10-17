@@ -236,6 +236,61 @@ def check_auto(runners, d):
     return fails
 
 
+# ── row bands (the web app's worker): bands assembled = the whole image ──────
+
+BANDS_JS = r"""
+import { ZigZag, autoSize } from '%s';
+import fs from 'fs';
+let bad = 0;
+for (const path of process.argv.slice(2)) {
+    const buf = fs.readFileSync(path);
+    const [w, h] = new Int32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + 8));
+    const rgba = new Uint8ClampedArray(buf.buffer, buf.byteOffset + 8, w * h * 4);
+    for (const size of [autoSize(w, h), 12, 100]) {
+        const whole = ZigZag.foreground(rgba, w, h, size, 90);
+        const wholeHist = ZigZag.histogram(whole, w, h, 10);
+        for (const k of [2, 3, 7]) {
+            const fg = new Float64Array(w * h), hist = new Uint32Array(256);
+            for (let b = 0; b < k; b++) {
+                const y0 = Math.floor(h * b / k), y1 = Math.floor(h * (b + 1) / k);
+                const part = ZigZag.foreground(rgba, w, h, size, 90, y0, y1);
+                fg.set(part, y0 * w);
+                ZigZag.histogram(part, w, h, 10, y0, y1).forEach((n, i) => { hist[i] += n; });
+            }
+            if (fg.some((v, i) => v !== whole[i]) || hist.some((n, i) => n !== wholeHist[i])) {
+                console.log(`${path} size ${size}, ${k} bands`);
+                bad++;
+            }
+        }
+    }
+}
+process.exitCode = bad ? 1 : 0;
+"""
+
+
+def check_bands(images, d):
+    """The worker computes the foreground in row bands: assembled, they must
+    equal the whole image, values and histogram, for any band count."""
+    raws = []
+    for name, src in images:
+        rgba = cv2.cvtColor(cv2.imread(src, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGBA)
+        raw = os.path.join(d, f"{name}.bands.rgba")
+        with open(raw, "wb") as f:
+            f.write(np.array([rgba.shape[1], rgba.shape[0]], np.int32).tobytes())
+            f.write(rgba.tobytes())
+        raws.append(raw)
+    drv = os.path.join(d, "bands.mjs")
+    with open(drv, "w") as f:
+        f.write(BANDS_JS % JS.replace("\\", "/"))
+    res = subprocess.run(["node", drv, *raws], capture_output=True, text=True)
+    bad = res.returncode != 0
+    print(f"  {'OK  ' if not bad else 'FAIL'} js row bands (2, 3, 7) = whole image, "
+          f"{len(raws)} images x 3 sizes")
+    for line in (res.stdout + res.stderr).splitlines()[:4]:
+        print(f"         {line}")
+    return int(bad)
+
+
 def main():
     ap = argparse.ArgumentParser(description="ZigZag cross-port parity check")
     ap.add_argument("--keep", action="store_true", help="keep the working directory")
@@ -265,8 +320,10 @@ def main():
     others = [k for k in runners if k != ref]
     checks = fails = 0
 
-    print(f"\nautomatic size rule vs {ref}:")
+    print(f"\nautomatic size rule vs {ref}, and the row bands:")
     auto_fails = check_auto(runners, d)
+    if "js" in runners:
+        auto_fails += check_bands(images, d)
 
     print(f"\n{len(images)} images x {len(MODES)} modes x {len(PARAMS)} parameter sets "
           f"vs {ref}: {', '.join(others) or '(nothing to compare)'}\n")

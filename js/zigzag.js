@@ -21,7 +21,7 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.3.2';
+const VERSION = '1.3.3';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
@@ -58,8 +58,10 @@ function autoDespeckle(size) {
 
 /** Resolve and validate options; throws on values the pipeline cannot honour. */
 function resolveOptions(opts, w, h) {
+    if (!(w > 0 && h > 0)) throw new RangeError(`empty image: ${w}x${h}`);
     const o = { ...DEFAULTS };
-    for (const k of Object.keys(DEFAULTS)) if (opts[k] != null && opts[k] !== 'auto') o[k] = opts[k];
+    for (const k of Object.keys(DEFAULTS)) if (opts[k] != null) o[k] = opts[k];
+    for (const k of ['size', 'despeckle']) if (o[k] === 'auto') o[k] = null;
     if (!MODES.includes(o.mode)) {
         throw new Error(`invalid mode: ${o.mode} (expected binary, gray or color)`);
     }
@@ -69,11 +71,24 @@ function resolveOptions(opts, w, h) {
         throw new RangeError(`invalid size: ${o.size} (expected an integer 2..${MAX_SIZE})`);
     }
     if (!(o.weight > 0)) throw new RangeError(`invalid weight: ${o.weight} (expected > 0)`);
+    if (!Number.isInteger(o.thresholdOffset)) {
+        throw new RangeError(`invalid threshold offset: ${o.thresholdOffset} (expected an integer)`);
+    }
     if (o.despeckle == null) o.despeckle = autoDespeckle(o.size);
     if (!Number.isInteger(o.despeckle) || o.despeckle < 0) {
         throw new RangeError(`invalid despeckle: ${o.despeckle} (expected an integer >= 0)`);
     }
     return { ...o, auto };
+}
+
+/** The vertical pass of the 2x upsampling for source row y: rowA holds output
+ *  row 2y (sy = y - 0.25), rowB output row 2y+1 (sy = y + 0.25). */
+function verticalRows(src, w, h, y, rowA, rowB) {
+    const ya = Math.max(0, y - 1) * w, yc = y * w, yb = Math.min(h - 1, y + 1) * w;
+    for (let x = 0; x < w; x++) {
+        rowA[x] = src[ya + x] * 0.25 + src[yc + x] * 0.75;
+        rowB[x] = src[yc + x] * 0.75 + src[yb + x] * 0.25;
+    }
 }
 
 /**
@@ -252,14 +267,9 @@ class ZigZag {
         const W = w * 2;
         const out = new Uint8ClampedArray(W * h * 2 * 4);
         const px = new Uint32Array(out.buffer);
-        const rowA = new Float64Array(w);   // y2 = 2y   (sy = y - 0.25)
-        const rowB = new Float64Array(w);   // y2 = 2y+1 (sy = y + 0.25)
+        const rowA = new Float64Array(w), rowB = new Float64Array(w);
         for (let y = 0; y < h; y++) {
-            const ya = Math.max(0, y - 1) * w, yc = y * w, yb = Math.min(h - 1, y + 1) * w;
-            for (let x = 0; x < w; x++) {
-                rowA[x] = src[ya + x] * 0.25 + src[yc + x] * 0.75;
-                rowB[x] = src[yc + x] * 0.75 + src[yb + x] * 0.25;
-            }
+            verticalRows(src, w, h, y, rowA, rowB);
             const oa = 2 * y * W, ob = oa + W;
             for (let x = 0; x < w; x++) {
                 const xa = Math.max(0, x - 1), xb = Math.min(w - 1, x + 1);
@@ -278,21 +288,16 @@ class ZigZag {
      *  materializing the 2x image. */
     static #coverage(src, w, h, thr) {
         const cov = new Float64Array(w * h);
-        const rowA = new Float64Array(w);   // y2 = 2y   (sy = y - 0.25)
-        const rowB = new Float64Array(w);   // y2 = 2y+1 (sy = y + 0.25)
+        const rowA = new Float64Array(w), rowB = new Float64Array(w);
         for (let y = 0; y < h; y++) {
-            const ya = Math.max(0, y - 1) * w, yc = y * w, yb = Math.min(h - 1, y + 1) * w;
-            for (let x = 0; x < w; x++) {
-                rowA[x] = src[ya + x] * 0.25 + src[yc + x] * 0.75;
-                rowB[x] = src[yc + x] * 0.75 + src[yb + x] * 0.25;
-            }
+            verticalRows(src, w, h, y, rowA, rowB);
             for (let x = 0; x < w; x++) {
                 const xa = Math.max(0, x - 1), xb = Math.min(w - 1, x + 1);
                 const tl = (rowA[xa] * 0.25 + rowA[x] * 0.75) >= thr ? 1 : 0;
                 const tr = (rowA[x] * 0.75 + rowA[xb] * 0.25) >= thr ? 1 : 0;
                 const bl = (rowB[xa] * 0.25 + rowB[x] * 0.75) >= thr ? 1 : 0;
                 const br = (rowB[x] * 0.75 + rowB[xb] * 0.25) >= thr ? 1 : 0;
-                cov[yc + x] = (tl + tr + bl + br) * 0.25;
+                cov[y * w + x] = (tl + tr + bl + br) * 0.25;
             }
         }
         return cov;

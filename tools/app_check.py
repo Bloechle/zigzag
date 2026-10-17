@@ -80,6 +80,19 @@ class Checks:
         self.failures += not cond
 
 
+# The binary result on screen against the CPU port run on the same source.
+SAME_AS_PORT = """async () => {
+    const { ZigZag } = await import('./js/zigzag.js');
+    const src = document.getElementById('canvasOriginal');
+    const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
+    const ref = ZigZag.process(img, { mode: 'binary' });
+    const out = document.getElementById('canvasResult');
+    if (out.width !== ref.width || out.height !== ref.height) return false;
+    const got = out.getContext('2d').getImageData(0, 0, out.width, out.height).data;
+    return got.every((v, i) => v === ref.data[i]);
+}"""
+
+
 async def badge_with(page, text):
     await page.wait_for_function(
         f"document.getElementById('infoBadge').textContent.includes({text!r})", timeout=120000)
@@ -125,10 +138,10 @@ async def main():
         c.ok("(auto)" in badge and "gpu" in badge, f"example processed: {badge}")
 
         await page.click("[data-mode=gray]")
-        await page.wait_for_function("document.querySelector('[data-mode=gray]').ariaChecked === 'true'")
-        badge = await badge_with(page, " ms")
-        c.ok(await page.evaluate("document.getElementById('canvasResult').width") > 0,
-             "gray mode rendered")
+        await page.wait_for_function(       # gray is never upsampled: 1x once it has run
+            "document.getElementById('canvasResult').width === "
+            "document.getElementById('canvasOriginal').width", timeout=120000)
+        c.ok(True, "gray mode rendered at 1x")
 
         await page.click("#btnTune")
         await page.wait_for_timeout(400)
@@ -148,10 +161,22 @@ async def main():
         print("App without WebGPU (the CPU port in its worker):")
         plain = await p.chromium.launch()
         cpu_page = await plain.new_page()
+        cpu_errors = []
+        cpu_page.on("pageerror", lambda e: cpu_errors.append(str(e)))
         await cpu_page.goto(url + "index.html")
         await cpu_page.click("#btnExample")
         badge = await badge_with(cpu_page, " ms")
         c.ok("(auto)" in badge and "cpu" in badge, f"example processed: {badge}")
+        c.ok(await cpu_page.evaluate(SAME_AS_PORT), "worker result = ZigZag.process, pixel for pixel")
+
+        await cpu_page.click("#btnNew")     # New, then a new image, while a run is in flight
+        await cpu_page.click("#btnExample")
+        await cpu_page.wait_for_function("!document.getElementById('spinner').classList.contains('hidden')")
+        await cpu_page.click("#btnNew")
+        await cpu_page.click("#btnExample")
+        badge = await badge_with(cpu_page, " ms")
+        c.ok("cpu" in badge, "New during a run: the next image still processes")
+        c.ok(not cpu_errors, "no page errors" + (f": {cpu_errors}" if cpu_errors else ""))
         await plain.close()
 
         print("Offline:")

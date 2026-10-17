@@ -14,8 +14,9 @@ single global Otsu threshold; ink specks below an area that scales with the
 window are then removed (despeckle).
 
 Backends (auto-detected): CuPy (NVIDIA GPU, optional `pip install cupy-cuda12x`)
-or OpenCV (CPU, SIMD box filters). Exact integer sums in float64 — outputs are
-identical across backends and across the Java/JS ports.
+or OpenCV (CPU). Box sums are exact integers (int32 on OpenCV, a float64
+integral image on CuPy), so outputs are identical across backends and across
+the Java/JS ports.
 
 Copyright (c) Jean-Luc Bloechle - AGPL v3
 
@@ -44,7 +45,7 @@ except Exception:
     cp = None
     HAS_GPU = False
 
-__version__ = '1.3.2'
+__version__ = '1.3.3'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
 MAX_SIZE = 2048     # keeps 255 * (size + 1)² inside the int32 box sums of the other ports
@@ -192,6 +193,8 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
         raise ValueError(f"invalid mode: {mode!r} (expected binary, gray or color)")
     if getattr(rgb, 'ndim', 0) != 3 or rgb.shape[2] != 3:
         raise ValueError(f"expected an HxWx3 RGB array, got shape {getattr(rgb, 'shape', None)}")
+    if rgb.shape[0] == 0 or rgb.shape[1] == 0:
+        raise ValueError(f"empty image: {rgb.shape[1]}x{rgb.shape[0]}")
     auto = size is None or size == 'auto'
     if auto:
         size = auto_size(rgb.shape[1], rgb.shape[0])
@@ -199,6 +202,9 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
         raise ValueError(f"invalid size: {size!r} (expected an integer 2..{MAX_SIZE})")
     if not weight > 0:
         raise ValueError(f"invalid weight: {weight!r} (expected > 0)")
+    if int(threshold_offset) != threshold_offset:
+        raise ValueError(f"invalid threshold offset: {threshold_offset!r} (expected an integer)")
+    threshold_offset = int(threshold_offset)
     size = int(size)
     if despeckle is None or despeckle == 'auto':
         despeckle = auto_despeckle(size)
@@ -286,8 +292,8 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
-def _int_arg(minimum, auto=False):
-    """argparse type: an integer >= minimum, or 'auto' (-> None) when allowed."""
+def _int_arg(minimum, maximum=None, auto=False):
+    """argparse type: an integer in [minimum, maximum], or 'auto' (-> None) when allowed."""
     def parse(v):
         if auto and v == "auto":
             return None
@@ -295,9 +301,10 @@ def _int_arg(minimum, auto=False):
             n = int(v)
         except ValueError:
             n = None
-        if n is None or n < minimum:
+        if n is None or n < minimum or (maximum is not None and n > maximum):
+            rng = f">= {minimum}" if maximum is None else f"{minimum}..{maximum}"
             alt = " or 'auto'" if auto else ""
-            raise argparse.ArgumentTypeError(f"expected an integer >= {minimum}{alt}, got {v!r}")
+            raise argparse.ArgumentTypeError(f"expected an integer {rng}{alt}, got {v!r}")
         return n
     return parse
 
@@ -308,7 +315,7 @@ def main():
     parser.add_argument("images", nargs="+", help="input image file(s)")
     parser.add_argument("-m", "--mode", choices=MODES,
                         default="binary", help="output mode (default: binary)")
-    parser.add_argument("-s", "--size", type=_int_arg(2, auto=True), default=None,
+    parser.add_argument("-s", "--size", type=_int_arg(2, MAX_SIZE, auto=True), default=None,
                         help="window size in px, or 'auto' (default: auto, "
                              "from the image diagonal; 30 was the 1.0 default)")
     parser.add_argument("-w", "--weight", type=_int_arg(1), default=90,
@@ -334,12 +341,6 @@ def main():
     if args.backend == "gpu" and not HAS_GPU:
         parser.error("GPU backend requested but CuPy/CUDA is not available")
 
-    out_dir = None
-    if args.output and (len(args.images) > 1 or os.path.isdir(args.output)
-                        or args.output.endswith(("/", os.sep))):
-        out_dir = args.output
-        os.makedirs(out_dir, exist_ok=True)
-
     # expand *, ? and ** patterns even where the shell does not (Windows);
     # each entry carries its path relative to the pattern's fixed prefix,
     # so batch output mirrors the input folder tree
@@ -357,6 +358,12 @@ def main():
     if not items:
         print("No input images found.", file=sys.stderr)
         return 1
+
+    out_dir = None
+    if args.output and (len(items) > 1 or os.path.isdir(args.output)
+                        or args.output.endswith(("/", os.sep))):
+        out_dir = args.output
+        os.makedirs(out_dir, exist_ok=True)
 
     rows = []
     totals, count, failed = {"load": 0.0, "proc": 0.0, "save": 0.0}, 0, 0
@@ -388,7 +395,11 @@ def main():
         else:
             dst = args.output or os.path.splitext(path)[0] + "_ZZ.png"
         t0 = time.perf_counter()
-        if not cv2.imwrite(dst, out if out.ndim == 2 else cv2.cvtColor(out, cv2.COLOR_RGB2BGR)):
+        try:            # OpenCV 4 returns False, OpenCV 5 raises
+            written = cv2.imwrite(dst, out if out.ndim == 2 else cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
+        except cv2.error:
+            written = False
+        if not written:
             print(f"Cannot write image: {dst}", file=sys.stderr)
             failed += 1
             continue
@@ -408,7 +419,7 @@ def main():
         timing = (f"load {t_load:.0f} · proc {t_proc:.0f} · save {t_save:.0f} ms"
                   if args.time else f"{t_proc:.0f} ms")
         size_s = f"{info['size']} (auto)" if info['auto_size'] else str(info['size'])
-        print(f"{path} → {dst}  [size={size_s} weight={info['weight']} "
+        print(f"{path} -> {dst}  [size={size_s} weight={info['weight']} "
               f"despeckle={info['despeckle']} · {otsu_s}{info['backend']} · {timing}]")
 
     if args.csv and rows:
@@ -419,7 +430,7 @@ def main():
                         "in_width", "in_height", "out_width", "out_height",
                         "load_ms", "proc_ms", "save_ms"])
             w.writerows(rows)
-        print(f"metrics → {args.csv}")
+        print(f"metrics -> {args.csv}")
 
     if args.time and count > 1:
         print(f"— {count} images · load {totals['load'] / 1000:.2f} s "

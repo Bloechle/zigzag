@@ -24,12 +24,13 @@
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 import java.util.Locale;
 import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.3.2";
+    public static final String VERSION = "1.3.3";
     public static final int OTSU_CAP = 250;
     /** Options.size / Options.despeckle value that selects the automatic rule. */
     public static final int AUTO = -1;
@@ -261,11 +262,8 @@ public class ZigZag {
         IntStream.range(0, h).parallel().forEach(y -> {
             double[] rowA = new double[w], rowB = new double[w];
             verticalRows(src, w, h, y, rowA, rowB);
-            int oa = 2 * y * W, ob = oa + W;
-            for (double[] row : new double[][]{ rowA, rowB }) {
-                int o = row == rowA ? oa : ob;
-                binarizeRow(row, w, thr, out, o);
-            }
+            binarizeRow(rowA, w, thr, out, 2 * y * W);
+            binarizeRow(rowB, w, thr, out, (2 * y + 1) * W);
         });
         return out;
     }
@@ -366,7 +364,7 @@ public class ZigZag {
         // Otsu threshold on the foreground histogram (10% margin crop),
         // optionally shifted by the manual offset
         int otsuThr = otsu(histogram(fg, w, h, 10));
-        int thr = Math.min(255, Math.max(0, otsuThr + opts.thresholdOffset));
+        int thr = (int) Math.min(255, Math.max(0, (long) otsuThr + opts.thresholdOffset));
         info.otsu = otsuThr;
         info.threshold = thr;
         info.despeckle = minArea;
@@ -528,13 +526,14 @@ public class ZigZag {
         if (status != 0) System.exit(status);
     }
 
-    /** Integer option value, or null after printing why it is not one. */
-    static Integer intArg(String name, String v, int min) {
+    /** Integer option value in [min, max], or null after printing why it is not one. */
+    static Integer intArg(String name, String v, int min, int max) {
         try {
             int n = Integer.parseInt(v);
-            if (n >= min) return n;
+            if (n >= min && n <= max) return n;
         } catch (NumberFormatException e) { /* reported below */ }
-        System.err.println("Invalid " + name + "=" + v + " (expected an integer >= " + min + ")");
+        String range = max == Integer.MAX_VALUE ? ">= " + min : min + ".." + max;
+        System.err.println("Invalid " + name + "=" + v + " (expected an integer " + range + ")");
         return null;
     }
 
@@ -547,12 +546,12 @@ public class ZigZag {
             Integer v = 0;
             if (a.startsWith("--mode=")) opts.mode = a.substring(7);
             else if (a.equals("--size=auto")) opts.size = AUTO;
-            else if (a.startsWith("--size=")) { if ((v = intArg("--size", a.substring(7), 2)) != null) opts.size = v; }
-            else if (a.startsWith("--weight=")) { if ((v = intArg("--weight", a.substring(9), 1)) != null) opts.weight = v; }
+            else if (a.startsWith("--size=")) { if ((v = intArg("--size", a.substring(7), 2, MAX_SIZE)) != null) opts.size = v; }
+            else if (a.startsWith("--weight=")) { if ((v = intArg("--weight", a.substring(9), 1, Integer.MAX_VALUE)) != null) opts.weight = v; }
             else if (a.equals("--despeckle=auto")) opts.despeckle = AUTO;
-            else if (a.startsWith("--despeckle=")) { if ((v = intArg("--despeckle", a.substring(12), 0)) != null) opts.despeckle = v; }
+            else if (a.startsWith("--despeckle=")) { if ((v = intArg("--despeckle", a.substring(12), 0, Integer.MAX_VALUE)) != null) opts.despeckle = v; }
             else if (a.startsWith("--threshold-offset=")) {
-                if ((v = intArg("--threshold-offset", a.substring(19), Integer.MIN_VALUE)) != null) opts.thresholdOffset = v;
+                if ((v = intArg("--threshold-offset", a.substring(19), Integer.MIN_VALUE, Integer.MAX_VALUE)) != null) opts.thresholdOffset = v;
             }
             else if (a.startsWith("--output=")) output = a.substring(9);
             else if (a.equals("--no-upsample")) opts.upsample = false;
@@ -583,6 +582,7 @@ public class ZigZag {
             return hadPatterns ? 1 : 2;
         }
 
+        ImageIO.setUseCache(false);         // encode in memory, not through a temp file
         File outDir = null;
         if (output != null && (inputs.size() > 1 || new File(output).isDirectory()
                 || output.endsWith(File.separator) || output.endsWith("/"))) {
@@ -625,7 +625,14 @@ public class ZigZag {
                         : new File(input.replaceFirst("\\.[^.]+$", "") + "_ZZ.png");
             }
             t0 = System.nanoTime();
-            ImageIO.write(res.image, "png", dst);
+            // our own stream: ImageIO.write(img, fmt, File) prints a stack trace on a bad path
+            try (java.io.OutputStream out = new java.io.BufferedOutputStream(new java.io.FileOutputStream(dst))) {
+                ImageIO.write(res.image, "png", out);
+            } catch (IOException e) {
+                System.err.println("Cannot write image: " + dst);
+                failed++;
+                continue;
+            }
             double tSave = (System.nanoTime() - t0) / 1e6;
 
             totLoad += tLoad;

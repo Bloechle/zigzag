@@ -13,7 +13,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 | Path | What |
 |---|---|
 | `ports/zigzag.py` | Reference port: NumPy + OpenCV, optional CuPy GPU backend, CLI |
-| `ports/ZigZag.java` | Java 11+ port, single file, multi-threaded, same CLI |
+| `ports/ZigZag.java` | Java 11+ port, single file, multi-threaded, same options as the Python CLI (`--name=value` only) |
 | `js/zigzag.js` | Browser/Node port, dependency-free ES module; owns option resolution, Otsu and despeckle for the browser |
 | `js/zigzag-gpu.js` | WebGPU accelerator (WGSL, float32); imports those from `zigzag.js` |
 | `js/zigzag-worker.js` | Runs `zigzag.js` off the main thread; splits large images into row bands, one helper worker per core |

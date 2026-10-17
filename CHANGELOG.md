@@ -2,6 +2,16 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.3 — 2026-10-17
+
+**Same output as 1.3.2, bit for bit.** Fixes from a full audit.
+
+- Web app: loading an image, rotating or tapping New while a run is in flight no longer hangs the app (New during a CPU run left it spinning for good) or turns the GPU off for the session; a result for an image no longer shown is dropped. The CPU worker cancels its bands before stopping its helpers, and runs serial for good if a helper fails. Transparent images read as white paper instead of black ink. WebGPU accepts a window of 255 px (still exact in float32).
+- All ports: the same validation everywhere — an integer threshold offset (Java no longer overflows on a huge one), `auto` only for size and despeckle (JS accepted it for every option), empty images rejected.
+- Command lines: `--size` above 2048 is refused when parsed instead of failing mid-batch; an image that cannot be written is reported and the batch goes on (Java stopped; Python crashed with OpenCV 5); the Python CLI picks an output folder for a quoted pattern (`"scans/*.jpg" -o out`), and its output is plain ASCII, so a Windows console or a redirect no longer raises an encoding error.
+- Gates: `tools/parity.py` checks that the worker's row bands (2, 3, 7) assemble into exactly the whole image; `tools/app_check.py` compares the app's CPU result with `ZigZag.process` pixel for pixel, checks that gray renders at 1×, and taps New during a run.
+- Code: the JS 2× vertical pass is shared (`verticalRows`, as in Java); the Java helpers left over from the vector kernels work on whole rows; stale comments fixed.
+
 ## 1.3.2 — 2026-10-17
 
 **Same output as 1.3.1, bit for bit. No incubator code: the Java port runs on Java 11+ again, with no flag** (`java ZigZag.java …`).

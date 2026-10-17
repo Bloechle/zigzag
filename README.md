@@ -2,7 +2,7 @@
 
 # ZigZag
 
-**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built on running box sums, it is fast, accurate and simple: a 5.6 MP phone photo takes about 0.12 s in Java, 0.35 s in JavaScript and 0.5 s in Python on two CPU cores.
+**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built on running box sums, it is fast, accurate and simple: a 5.6 MP phone photo takes about 0.14 s in Java, 0.35 s in JavaScript and 0.5 s in Python on two CPU cores.
 
 **[▶ Try the live demo](https://bloechle.github.io/zigzag/)** — runs entirely in your browser, no upload.
 
@@ -13,7 +13,7 @@
 | File / folder | Content |
 |---|---|
 | [`ports/zigzag.py`](ports/zigzag.py) | Reference implementation — single file, CPU/GPU backends, full CLI |
-| [`ports/ZigZag.java`](ports/ZigZag.java) | Java implementation — single file, multi-threaded, same CLI |
+| [`ports/ZigZag.java`](ports/ZigZag.java) | Java implementation — single file, multi-threaded, same options as the Python CLI |
 | [`js/zigzag.js`](js/zigzag.js) | Browser implementation — dependency-free ES module |
 | [`js/zigzag-gpu.js`](js/zigzag-gpu.js) | Optional WebGPU accelerator — same pipeline as WGSL compute shaders |
 | [`js/zigzag-worker.js`](js/zigzag-worker.js) | Runs the CPU port off the main thread for the web app |
@@ -126,7 +126,7 @@ if (ZigZagGPU.isSupported()) {
 }
 ```
 
-It takes the same options with the same defaults, resolved by the same code as the CPU port. Its box sums are float32, which stays exact up to a 254 px window; larger windows are refused (the automatic size stops at 250). The 2× buffers cost 16 bytes per source pixel, and WebGPU's *default* storage-buffer binding limit is 128 MiB — only ~8.4 MP. `init()` therefore requests the adapter's real limits and exposes the resulting ceiling as `gpu.maxPixels`; downscale to it before uploading. Every submit runs inside a validation error scope, so a rejected dispatch throws instead of silently returning an unwritten buffer, which is what makes the CPU fallback reliable. The Otsu threshold and the despeckle are imported from `zigzag.js` rather than reimplemented, so the two backends cannot diverge on them.
+It takes the same options with the same defaults, resolved by the same code as the CPU port. Its box sums are float32, which stays exact up to a 255 px window; larger windows are refused (the automatic size stops at 250). The 2× buffers cost 16 bytes per source pixel, and WebGPU's *default* storage-buffer binding limit is 128 MiB — only ~8.4 MP. `init()` therefore requests the adapter's real limits and exposes the resulting ceiling as `gpu.maxPixels`; downscale to it before uploading. Every submit runs inside a validation error scope, so a rejected dispatch throws instead of silently returning an unwritten buffer, which is what makes the CPU fallback reliable. The Otsu threshold and the despeckle are imported from `zigzag.js` rather than reimplemented, so the two backends cannot diverge on them.
 
 [`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W / Gray / Color, rotate, tune **Window** (`size`, automatic by default, or a fixed window in px), **Background** (`weight`), **Ink** (`threshold-offset`) and **Specks** (the despeckle, on by default), each with a plain-language explanation behind the **?** in the settings sheet, pinch-zoom and pan the full-width preview (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` `3` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `space` toggle original, `←` `→` move the comparison slider, `Esc` close the settings.
 

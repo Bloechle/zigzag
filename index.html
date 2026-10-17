@@ -438,8 +438,8 @@
     const PREFS_KEY = 'zigzag.prefs';
     const PREFS_VERSION = 2;         // 2: Window gained "Auto", the new default
 
-    // The CPU port needs ~64 bytes/pixel of float64 scratch and runs at ~0.4 s/MP,
-    // so it gets a much tighter budget than the GPU (whose ceiling is a device limit).
+    // The CPU port needs ~64 bytes/pixel of float64 scratch, so it gets a much
+    // tighter budget than the GPU (whose ceiling is a device limit).
     const CPU_MAX_PIXELS = 4_000_000;
     const GPU_MAX_PIXELS = 12_000_000;
 
@@ -449,7 +449,7 @@
     let srcName = 'document';
     let origSize = null;             // [w, h] before downscale, or null
     let mode = 'binary';
-    let busy = false, pending = false, debounceId = 0;
+    let running = null, pending = false, debounceId = 0;   // running: the run in flight
     let comparePos = 0.5, toggled = false;
     let allowUpsample = true;        // cleared if the browser refuses the 2x canvas
     let sheetOpen = false;
@@ -552,8 +552,15 @@
     }
 
     // ── image loading ──
+    /** Resolves once no run is in flight: the GPU buffers and the worker's copy
+     *  belong to the running job until then. */
+    async function idle() {
+        while (running) await running;
+    }
+
     /** Install a new source image: GPU upload, worker upload, preview, run. */
     async function setSource(image) {
+        await idle();
         srcImage = image;
         allowUpsample = true;     // a previous oversized image must not stick at 1x
         if (gpu) {
@@ -592,6 +599,8 @@
         const c = document.createElement('canvas');
         c.width = w; c.height = h;
         const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = '#fff';               // transparent pixels are paper, not black ink
+        ctx.fillRect(0, 0, w, h);
         const own = src instanceof ImageData;
         const bmp = own ? await createImageBitmap(src) : src;
         ctx.drawImage(bmp, 0, 0, w, h);
@@ -616,8 +625,8 @@
         loadBlob(file, file.name).catch(() => notify(`Could not read “${file.name}”`));
     }
 
-    /** Rotate the source 90° clockwise, keeping the current parameters.
-     *  Safe mid-run: the worker holds its own copy and run() supersedes itself. */
+    /** Rotate the source 90° clockwise, keeping the current parameters
+     *  (setSource waits for a run in flight). */
     async function rotate() {
         if (!srcImage) return;
         const { width: w, height: h } = srcImage;
@@ -650,10 +659,24 @@
         }
     }
 
+    /** Process the current source; a call during a run is queued (once). */
     async function run() {
         if (!srcImage) return;
-        if (busy) { pending = true; return; }
-        busy = true;
+        if (running) { pending = true; return; }
+        running = runOnce(srcImage);
+        let shrink;
+        try { shrink = await running; } finally { running = null; }
+        if (shrink) {               // the GPU failed on an image sized for it
+            origSize ??= [shrink.width, shrink.height];
+            notify('GPU unavailable — reduced for the CPU');
+            return setSource(await toImageData(shrink, CPU_MAX_PIXELS));
+        }
+        if (pending && srcImage) { pending = false; run(); }
+    }
+
+    /** One run on image; returns the image when it must be shrunk for the CPU.
+     *  A result for an image no longer shown (New, a new image) is dropped. */
+    async function runOnce(image) {
         el.spinner.classList.remove('hidden');
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
@@ -677,52 +700,50 @@
                     dropGpu();
                     // the source was sized for the GPU budget; the CPU port needs
                     // ~64 bytes/pixel of float64 scratch, so shrink before falling back
-                    if (srcImage.width * srcImage.height > CPU_MAX_PIXELS) {
-                        busy = false;                 // setSource() re-enters run()
+                    if (image.width * image.height > CPU_MAX_PIXELS) {
                         pending = false;
-                        origSize ??= [srcImage.width, srcImage.height];
-                        notify('GPU unavailable — reduced for the CPU');
-                        return setSource(await toImageData(srcImage, CPU_MAX_PIXELS));
+                        return image;
                     }
                 }
             }
             if (!res) res = await cpuProcess(opts);
-            if (!res) res = ZigZag.process(srcImage, opts);   // worker died mid-flight
+            if (!res) res = ZigZag.process(image, opts);   // worker died mid-flight
         } catch (err) {
-            // never leave the spinner up and the queue locked behind a failed run
-            busy = false;
+            // never leave the spinner up behind a failed run
             pending = false;
             el.spinner.classList.add('hidden');
             console.error(err);
-            return notify('Processing failed — try a smaller image');
+            notify('Processing failed — try a smaller image');
+            return null;
         }
         const ms = performance.now() - t0;
+        el.spinner.classList.add('hidden');
+        if (image !== srcImage) return null;
 
-        busy = false;
         if (!showResult(res)) {
-            el.spinner.classList.add('hidden');
-            if (res.width > srcImage.width) {   // 2x is too big for this browser
+            if (res.width > image.width) {      // 2x is too big for this browser
                 allowUpsample = false;
-                return run();
+                pending = true;
+                return null;
             }
             pending = false;
-            return notify('Image too large for this browser');
+            notify('Image too large for this browser');
+            return null;
         }
 
         const i = res.info;
         const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
-        const up = res.width !== srcImage.width ? ` → ${res.width}×${res.height}` : '';
+        const up = res.width !== image.width ? ` → ${res.width}×${res.height}` : '';
         const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
         const wt = (i.weight !== 90 ? ` · w ${i.weight}` : '') + (i.despeckle === 0 ? ' · specks kept' : '');
         clearTimeout(badgeTimer);
         const sz = i.autoSize ? `size ${i.size} (auto)` : `size ${i.size}`;
-        lastBadge = `${srcImage.width}×${srcImage.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+        lastBadge = `${image.width}×${image.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
         el.infoBadge.textContent = lastBadge;
 
         el.btnSave.disabled = false;
         el.btnShare.disabled = false;
-        el.spinner.classList.add('hidden');
-        if (pending) { pending = false; run(); }
+        return null;
     }
 
     // ── viewport: full-width fit + pinch zoom & pan ──
@@ -996,10 +1017,14 @@
 
     // ── output ──
     el.btnNew.addEventListener('click', () => {
-        srcImage = null;
+        srcImage = null;                         // a run in flight drops its result
         origSize = null;
-        try { gpu?.destroy(); } catch { /* lost */ }   // release the per-image GPU buffers
-        worker?.postMessage({ image: null });    // and the worker's copy
+        pending = false;
+        idle().then(() => {                      // the run in flight owns them until it ends
+            if (srcImage) return;                // a new image came in meanwhile
+            try { gpu?.destroy(); } catch { /* lost */ }   // release the per-image GPU buffers
+            worker?.postMessage({ image: null });          // and the worker's copy
+        });
         el.canvasResult.width = el.canvasResult.height = 0;
         el.canvasOriginal.width = el.canvasOriginal.height = 0;
         allowUpsample = true;

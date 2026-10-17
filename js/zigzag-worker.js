@@ -45,25 +45,22 @@ function runBand({ job, image, y0, y1, size, weight }) {
 
 function setImage(image) {
     source = image;
-    if (!image) {                                         // released: so are the helpers' copies
-        for (const helper of helpers ?? []) helper.worker.terminate();
-        helpers = null;
-    }
+    if (!image) stopHelpers(null);                        // released: so are the helpers' copies
     for (const helper of helpers ?? []) helper.sent = false;   // they receive it with their next band
 }
 
 async function run({ id, opts }) {
-    if (!source) throw new Error('no source image');
-    const { data, width: w, height: h } = source;
-    const res = w * h >= PARALLEL_MIN_PIXELS && startHelpers().length
-        ? parallel(source, opts)
-        : ZigZag.process(source, opts);
-    const out = await res;
+    const image = source;
+    if (!image) throw new Error('no source image');
+    const out = image.width * image.height >= PARALLEL_MIN_PIXELS && startHelpers().length
+        ? await parallel(image, opts).catch(() => ZigZag.process(image, opts))   // a helper failed
+        : ZigZag.process(image, opts);
     self.postMessage({ id, ...out }, [out.data.buffer]);
 }
 
 /** ZigZag.process with the foreground computed in bands, one per core. */
-async function parallel({ data, width: w, height: h }, opts) {
+async function parallel(image, opts) {
+    const { data, width: w, height: h } = image;
     const o = resolveOptions(opts, w, h);
     const k = helpers.length + 1;
     const bounds = Array.from({ length: k + 1 }, (_, b) => Math.floor(h * b / k));
@@ -71,7 +68,7 @@ async function parallel({ data, width: w, height: h }, opts) {
         const job = ++jobs;
         pending.set(job, { resolve: msg => resolve({ ...msg, y0: bounds[b] }), reject });
         const band = { job, y0: bounds[b], y1: bounds[b + 1], size: o.size, weight: o.weight };
-        if (!helper.sent) { band.image = source; helper.sent = true; }   // copied once per image
+        if (!helper.sent) { band.image = image; helper.sent = true; }   // copied once per image
         helper.worker.postMessage({ band });
     }));
 
@@ -94,23 +91,29 @@ function startHelpers() {
     if (helpers) return helpers;
     helpers = [];
     const cores = Math.min(8, self.navigator?.hardwareConcurrency || 1);
-    const settle = (job, how, value) => {
-        const p = pending.get(job);
-        pending.delete(job);
-        p?.[how](value);
-    };
     try {
         for (let i = 1; i < cores; i++) {
             const worker = new Worker(new URL(import.meta.url), { type: 'module' });
-            worker.onmessage = ({ data }) => settle(data.done, 'resolve', data);
-            worker.onerror = () => {             // a failed band fails the run; the page falls back
-                for (const job of [...pending.keys()]) settle(job, 'reject', new Error('helper failed'));
+            worker.onmessage = ({ data }) => {
+                const job = pending.get(data.done);
+                pending.delete(data.done);
+                job?.resolve(data);
             };
+            // a failed helper fails the run (the page falls back) and the bands for good
+            worker.onerror = () => stopHelpers([]);
             helpers.push({ worker, sent: false });
         }
     } catch {
-        for (const helper of helpers) helper.worker.terminate();
-        helpers = [];
+        stopHelpers([]);
     }
     return helpers;
+}
+
+/** Terminate the helpers and fail their bands in flight; next: null starts them
+ *  again on the next large run, [] keeps the coordinator serial. */
+function stopHelpers(next) {
+    for (const helper of helpers ?? []) helper.worker.terminate();
+    helpers = next;
+    for (const { reject } of pending.values()) reject(new Error('band cancelled'));
+    pending.clear();
 }
