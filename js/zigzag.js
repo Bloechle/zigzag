@@ -208,13 +208,16 @@ class ZigZag {
         return dst;
     }
 
-    static histogram(values, w, h, marginPercent) {
+    /** Histogram of the foreground inside a marginPercent crop of the w x h
+     *  image. values holds rows y0..y1-1 (the whole image by default), so
+     *  bands can be counted separately and their histograms added. */
+    static histogram(values, w, h, marginPercent, y0 = 0, y1 = h) {
         const hist = new Uint32Array(256);
         const mw = Math.floor(w * marginPercent / 100);
         const mh = Math.floor(h * marginPercent / 100);
-        for (let y = mh; y < h - mh; y++) {
-            for (let x = mw; x < w - mw; x++) {
-                hist[Math.min(255, Math.max(0, Math.trunc(values[y * w + x])))]++;
+        for (let y = Math.max(mh, y0); y < Math.min(h - mh, y1); y++) {
+            for (let x = mw, i = (y - y0) * w + mw; x < w - mw; x++, i++) {
+                hist[Math.min(255, Math.max(0, Math.trunc(values[i])))]++;
             }
         }
         return hist;
@@ -306,25 +309,35 @@ class ZigZag {
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {
-        const { width: w, height: h } = imageData;
-        const rgba = imageData.data;
-        const { mode, size, weight, upsample, thresholdOffset: offset, despeckle: minArea, auto } =
-            resolveOptions(opts, w, h);
+        const { width: w, height: h, data: rgba } = imageData;
+        const o = resolveOptions(opts, w, h);
+        const fg = ZigZag.foreground(rgba, w, h, o.size, o.weight);
+        return ZigZag.finish(fg, ZigZag.histogram(fg, w, h, 10), rgba, w, h, o);
+    }
 
+    /**
+     * Pass A and Pass B: the normalized foreground of rows y0..y1-1 (the whole
+     * image by default). A band reads only the rows it needs — Pass B sums at
+     * rows y0..y1-1 read the background mask of rows y0-r..y1+r-1, whose
+     * Pass A sums read the gray levels of rows y0-2r..y1+2r-1 — so bands can
+     * be computed apart (in parallel) and give exactly the whole-image values.
+     */
+    static foreground(rgba, w, h, size, weight, y0 = 0, y1 = h) {
         const r = Math.floor(size / 2);
         const wf = weight / 100;
-        const n = w * h;
-        const gray = ZigZag.grayImage(rgba, w, h);
+        const top = Math.max(0, y0 - 2 * r), bot = Math.min(h, y1 + 2 * r), sh = bot - top;
+        const n = w * sh;
+        const gray = ZigZag.grayImage(rgba.subarray(top * w * 4, bot * w * 4), w, sh);
 
         // Pass A — background classification against the weighted local mean
-        let sumAll = ZigZag.boxSum(gray, w, h, r);
+        let sumAll = ZigZag.boxSum(gray, w, sh, r);
         const maskVal = new Uint8Array(n);     // gray value where background, else 0
         const maskCnt = new Uint8Array(n);     // 1 where background, else 0
         const cols = new Int32Array(w);        // pixels of the clamped window, per column
         for (let x = 0; x < w; x++) cols[x] = Math.min(w - 1, x + r) - Math.max(0, x - r) + 1;
-        for (let y = 0; y < h; y++) {
+        for (let y = Math.max(top, y0 - r); y < Math.min(bot, y1 + r); y++) {
             const cy = Math.min(h - 1, y + r) - Math.max(0, y - r) + 1;
-            for (let x = 0, i = y * w; x < w; x++, i++) {
+            for (let x = 0, i = (y - top) * w; x < w; x++, i++) {
                 if (gray[i] >= wf * sumAll[i] / (cols[x] * cy)) {
                     maskVal[i] = gray[i];
                     maskCnt[i] = 1;
@@ -334,37 +347,42 @@ class ZigZag {
 
         sumAll = null;   // released before Pass B allocates its own sums
 
-        // Pass B — normalization against the local mean of background-only pixels
-        const cntBg = ZigZag.boxSum(maskCnt, w, h, r);
-
-        // fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows → 255
-        const sumBg = ZigZag.boxSum(maskVal, w, h, r);
-        const fg = new Float64Array(n);
-        for (let i = 0; i < n; i++) {
+        // Pass B — fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground windows → 255
+        const cntBg = ZigZag.boxSum(maskCnt, w, sh, r);
+        const sumBg = ZigZag.boxSum(maskVal, w, sh, r);
+        const fg = new Float64Array((y1 - y0) * w);
+        for (let i = (y0 - top) * w, j = 0; j < fg.length; i++, j++) {
             const cnt = cntBg[i];
             const meanBg = cnt > 0 ? sumBg[i] / cnt : 0;
             const v = gray[i];
-            fg[i] = (v >= meanBg || cnt === 0) ? 255 : Math.min(255, v * 256 / Math.max(1, meanBg));
+            fg[j] = (v >= meanBg || cnt === 0) ? 255 : Math.min(255, v * 256 / Math.max(1, meanBg));
         }
+        return fg;
+    }
 
-        // Otsu threshold on the foreground histogram (10% margin crop),
-        // optionally shifted by the manual offset
-        const otsu = ZigZag.otsu(ZigZag.histogram(fg, w, h, 10));
-        const thr = Math.min(255, Math.max(0, otsu + offset));
-        const info = { size, autoSize: auto, weight, otsu, threshold: thr, despeckle: minArea };
+    /**
+     * Everything after the foreground: Otsu threshold from its histogram (10 %
+     * margin crop) shifted by the offset, despeckle, then the output mode.
+     * o: options from resolveOptions. fg is modified (despeckled) in place.
+     */
+    static finish(fg, hist, rgba, w, h, o) {
+        const n = w * h;
+        const otsu = ZigZag.otsu(hist);
+        const thr = Math.min(255, Math.max(0, otsu + o.thresholdOffset));
+        const info = { size: o.size, autoSize: o.auto, weight: o.weight, otsu, threshold: thr, despeckle: o.despeckle };
 
         // Despeckle: ink components smaller than the area become paper. Done on
         // the 1x foreground, before any output: a removed speck's neighbours are
         // all paper, so every 2x sample around it is paper too, in every mode.
-        if (minArea > 1) despeckle(fg, w, h, thr, minArea);
+        if (o.despeckle > 1) despeckle(fg, w, h, thr, o.despeckle);
 
-        if (mode === 'gray' || mode === 'color') {
+        if (o.mode === 'gray' || o.mode === 'color') {
             // antialiased background cleanup: blend toward white with the 2x2
             // coverage of the thresholded 2x foreground - sharp text, soft cutoff
             const cov = ZigZag.#coverage(fg, w, h, thr);
             const out = new Uint8ClampedArray(n * 4);
 
-            if (mode === 'gray') {
+            if (o.mode === 'gray') {
                 for (let i = 0; i < n; i++) {
                     const v = Math.trunc(Math.min(255, Math.max(0,
                         cov[i] * 255.0 + (1.0 - cov[i]) * fg[i])));
@@ -373,22 +391,23 @@ class ZigZag {
                 }
             } else {
                 // luminance-guided: normalize once on luma, re-apply the colors
+                const gray = ZigZag.grayImage(rgba, w, h);
                 for (let i = 0; i < n; i++) {
-                    const o = i * 4;
+                    const p = i * 4;
                     const ratio = fg[i] / Math.max(1, gray[i]);
                     const c = cov[i], k = 1.0 - c;
                     for (let ch = 0; ch < 3; ch++) {
-                        const tc = Math.min(255, rgba[o + ch] * ratio);
-                        out[o + ch] = Math.trunc(Math.min(255, Math.max(0, c * 255.0 + k * tc)));
+                        const tc = Math.min(255, rgba[p + ch] * ratio);
+                        out[p + ch] = Math.trunc(Math.min(255, Math.max(0, c * 255.0 + k * tc)));
                     }
-                    out[o + 3] = 255;
+                    out[p + 3] = 255;
                 }
             }
             return { data: out, width: w, height: h, info };
         }
 
         // binary — threshold, 2x upsample by default for detail preservation
-        if (upsample) {
+        if (o.upsample) {
             const out = ZigZag.#upsampleBinarize(fg, w, h, thr);
             return { data: out, width: w * 2, height: h * 2, info };
         }

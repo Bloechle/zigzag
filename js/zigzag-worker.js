@@ -1,35 +1,116 @@
 /*
- * zigzag-worker.js — runs the CPU port off the main thread.
+ * zigzag-worker.js — runs the CPU port off the main thread, on every core.
  *
- * The source image is uploaded once and kept here, so each run only ships the
- * options across; the result is transferred back rather than copied.
+ * The page talks to one worker, the coordinator. It keeps the source image, so
+ * each run only ships the options across, and the result is transferred back
+ * rather than copied:
  *
  *   worker.postMessage({ image: { data, width, height } }, [data.buffer]);
  *   worker.postMessage({ id, opts });   // -> { id, data, width, height, info }
  *   worker.postMessage({ image: null });               // release it
  *
+ * For a large image the coordinator splits the heavy half of the pipeline —
+ * gray levels, box sums, Pass A, Pass B — into bands of rows, one per core: it
+ * starts helper workers (this same file, sent { band } messages instead) and
+ * computes one band itself. ZigZag.foreground gives a band exactly the
+ * whole-image values, so the result is bit-identical to ZigZag.process. The
+ * rest — Otsu, despeckle (connected components span bands), output — runs here.
+ *
  * Copyright (c) Jean-Luc Bloechle - AGPL v3
  */
 
-import { ZigZag } from './zigzag.js';
+import { ZigZag, resolveOptions } from './zigzag.js';
+
+const PARALLEL_MIN_PIXELS = 1_000_000;   // below this, starting the bands costs more than it saves
 
 let source = null;
+let helpers = null;                      // started on the first large run; [] when unavailable
+let jobs = 0;
+const pending = new Map();               // band job -> { resolve, reject }
 
 self.onmessage = ({ data: msg }) => {
-    if ('image' in msg) {          // null releases the cached source
-        source = msg.image;
-        return;
-    }
-    if (!source) {
-        self.postMessage({ id: msg.id, error: 'no source image' });
-        return;
-    }
-    let res;
-    try {
-        res = ZigZag.process(source, msg.opts);
-    } catch (err) {                // e.g. an allocation refused: report, stay alive
-        self.postMessage({ id: msg.id, error: String(err?.message ?? err) });
-        return;
-    }
-    self.postMessage({ id: msg.id, ...res }, [res.data.buffer]);
+    if ('band' in msg) return runBand(msg.band);          // helper role
+    if ('image' in msg) return setImage(msg.image);
+    run(msg).catch(err => self.postMessage({ id: msg.id, error: String(err?.message ?? err) }));
 };
+
+/** Helper: the foreground of one band, and its histogram. */
+function runBand({ job, image, y0, y1, size, weight }) {
+    if (image) source = image;
+    const { data, width: w, height: h } = source;
+    const fg = ZigZag.foreground(data, w, h, size, weight, y0, y1);
+    const hist = ZigZag.histogram(fg, w, h, 10, y0, y1);
+    self.postMessage({ done: job, fg, hist }, [fg.buffer]);
+}
+
+function setImage(image) {
+    source = image;
+    if (!image) {                                         // released: so are the helpers' copies
+        for (const helper of helpers ?? []) helper.worker.terminate();
+        helpers = null;
+    }
+    for (const helper of helpers ?? []) helper.sent = false;   // they receive it with their next band
+}
+
+async function run({ id, opts }) {
+    if (!source) throw new Error('no source image');
+    const { data, width: w, height: h } = source;
+    const res = w * h >= PARALLEL_MIN_PIXELS && startHelpers().length
+        ? parallel(source, opts)
+        : ZigZag.process(source, opts);
+    const out = await res;
+    self.postMessage({ id, ...out }, [out.data.buffer]);
+}
+
+/** ZigZag.process with the foreground computed in bands, one per core. */
+async function parallel({ data, width: w, height: h }, opts) {
+    const o = resolveOptions(opts, w, h);
+    const k = helpers.length + 1;
+    const bounds = Array.from({ length: k + 1 }, (_, b) => Math.floor(h * b / k));
+    const done = helpers.map((helper, b) => new Promise((resolve, reject) => {
+        const job = ++jobs;
+        pending.set(job, { resolve: msg => resolve({ ...msg, y0: bounds[b] }), reject });
+        const band = { job, y0: bounds[b], y1: bounds[b + 1], size: o.size, weight: o.weight };
+        if (!helper.sent) { band.image = source; helper.sent = true; }   // copied once per image
+        helper.worker.postMessage({ band });
+    }));
+
+    // the coordinator takes the last band while the helpers work
+    const y0 = bounds[k - 1];
+    const own = ZigZag.foreground(data, w, h, o.size, o.weight, y0, h);
+    const parts = [{ fg: own, hist: ZigZag.histogram(own, w, h, 10, y0, h), y0 }, ...await Promise.all(done)];
+
+    const fg = new Float64Array(w * h);
+    const hist = new Uint32Array(256);
+    for (const part of parts) {
+        fg.set(part.fg, part.y0 * w);
+        for (let i = 0; i < 256; i++) hist[i] += part.hist[i];
+    }
+    return ZigZag.finish(fg, hist, data, w, h, o);
+}
+
+/** One helper per extra core; none where nested workers are unavailable. */
+function startHelpers() {
+    if (helpers) return helpers;
+    helpers = [];
+    const cores = Math.min(8, self.navigator?.hardwareConcurrency || 1);
+    const settle = (job, how, value) => {
+        const p = pending.get(job);
+        pending.delete(job);
+        p?.[how](value);
+    };
+    try {
+        for (let i = 1; i < cores; i++) {
+            const worker = new Worker(new URL(import.meta.url), { type: 'module' });
+            worker.onmessage = ({ data }) => settle(data.done, 'resolve', data);
+            worker.onerror = () => {             // a failed band fails the run; the page falls back
+                for (const job of [...pending.keys()]) settle(job, 'reject', new Error('helper failed'));
+            };
+            helpers.push({ worker, sent: false });
+        }
+    } catch {
+        for (const helper of helpers) helper.worker.terminate();
+        helpers = [];
+    }
+    return helpers;
+}
