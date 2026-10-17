@@ -253,7 +253,9 @@ for (const path of process.argv.slice(2)) {
             const fg = new Float64Array(w * h), hist = new Uint32Array(256);
             for (let b = 0; b < k; b++) {
                 const y0 = Math.floor(h * b / k), y1 = Math.floor(h * (b + 1) / k);
-                const part = ZigZag.foreground(rgba, w, h, size, 90, y0, y1);
+                const [top, bot] = ZigZag.bandRows(h, size, y0, y1);   // only the rows it reads
+                const rows = rgba.slice(top * w * 4, bot * w * 4);
+                const part = ZigZag.foreground(rows, w, h, size, 90, y0, y1, top);
                 fg.set(part, y0 * w);
                 ZigZag.histogram(part, w, h, 10, y0, y1).forEach((n, i) => { hist[i] += n; });
             }

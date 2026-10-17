@@ -6,7 +6,7 @@
 
 **[▶ Try the live demo](https://bloechle.github.io/zigzag/)** — runs entirely in your browser, no upload.
 
-📄 Read the paper: [*ZigZag: A Robust Adaptive Approach to Non-Uniformly Illuminated Document Image Binarization*](https://doi.org/10.1145/3685650.3685661) — ACM DocEng 2024, where it received the [best paper award](https://www.sigweb.org/awards) and ranked first in the [binarization competition](https://doi.org/10.1145/3685650.3686793).
+📄 Read the paper: [*ZigZag: A Robust Adaptive Approach to Non-Uniformly Illuminated Document Image Binarization*](https://doi.org/10.1145/3685650.3685661) — ACM DocEng 2024, where it received the [Best Paper Award](https://www.acm.org/conferences/best-paper-awards-2024). ZigZag was also among the new algorithms assessed by the DocEng 2024 [competition on binarizing photographed document images](https://doi.org/10.1145/3685650.3686793), which evaluated 23 new and 75 classical algorithms for quality, time and space.
 
 ## Repository layout
 

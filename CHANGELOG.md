@@ -2,6 +2,14 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.4 — 2026-10-17
+
+**Same output as 1.3.3, bit for bit.**
+
+- Web app: the CPU worker's helpers no longer keep a copy of the image. Each run hands every helper only the rows its band reads (its own plus a margin of twice the half-window, `ZigZag.bandRows`), transferred rather than copied, and freed with the run; on an eight-core phone the helpers held seven full copies of the image before. Same speed on two cores in Chromium.
+- JS: `ZigZag.foreground` accepts the rows of a band alone (`rgbaTop`), and `ZigZag.bandRows` says which rows those are; the parity gate checks bands built that way.
+- README: the award links to ACM's list of 2024 best papers, and the 2024 competition is cited for what its report states.
+
 ## 1.3.3 — 2026-10-17
 
 **Same output as 1.3.2, bit for bit.** Fixes from a full audit.

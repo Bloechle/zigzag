@@ -106,11 +106,15 @@ What it relies on:
   counts. Its remaining time is the divisions of Pass A and Pass B.
 - **Web app, CPU path** (1.3.1): `zigzag-worker.js` coordinates helper workers (the same
   file) that each compute `ZigZag.foreground` for a band of rows `[y0, y1)` from the rows
-  `[y0-2r, y1+2r)` — Pass A needs r rows of mask around Pass B's window, which needs r more
-  — plus its histogram; bands assemble into exactly the whole-image values. `finish`
-  (Otsu, despeckle, output) stays serial: components cross bands. 1 MP minimum, eight cores
-  at most; the image is posted once per helper per source. `tools/app_check.py` runs the
-  app without WebGPU, so the coordinator is gated.
+  `ZigZag.bandRows` gives, `[y0-2r, y1+2r)` — Pass A needs r rows of mask around Pass B's
+  window, which needs r more — plus its histogram; bands assemble into exactly the
+  whole-image values. `finish` (Otsu, despeckle, output) stays serial: components cross
+  bands. 1 MP minimum, eight cores at most. Helpers are stateless (1.3.4): each run slices
+  a band's rows and transfers them, so no helper keeps a copy of the image (before, each
+  kept a full one: 7 × 4 B/px on eight cores). Measured on two cores in Chromium, median
+  of 9: serial 750–1080 ms, bands 600–790 ms in binary (the VM is noisy); worth keeping
+  for browsers without WebGPU on multi-core phones. `parity.py` checks the bands, sliced
+  rows included; `app_check.py` compares the worker's result with `ZigZag.process`.
 - Measured and rejected: computing the Pass B division only on pixels darker than their
   background (53 % of a page are, no gain); a full 16 MB RGB→gray lookup table; a
   WebAssembly Pass B (about 1.5× the JS loop, and WASM SIMD has no float64 division to
@@ -157,7 +161,10 @@ What it relies on:
 - The Java port must compile with `javac --release 11`: check it after any Java change
   (CI's JDK 11 job does too).
 - `sw.js` must stay at the root (Pages cannot set `Service-Worker-Allowed`).
-- Award wording: SIGWEB DocEng Best Paper Award (the Engelbart award is Hypertext's).
+- Award wording: DocEng '24 Best Paper Award, linked to ACM's list
+  (acm.org/conferences/best-paper-awards-2024); sigweb.org/awards is Hypertext's Engelbart
+  page. The 2024 competition is cited for what its abstract states (23 new and 75 classical
+  algorithms assessed); no ranking is claimed here — that is evaluation, see UniFR.
 - IntelliJ builds into `out/`; it stays in `.gitignore`.
 
 ## Releasing a version
@@ -174,7 +181,7 @@ What it relies on:
 
 ## Where this stands (2026-10-17)
 
-Version 1.3.3: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
+Version 1.3.4: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
 output, faster in all ports, 1.3.1 spreads the app's CPU path over the cores, and 1.3.2
-removes the incubating Vector API (Java 11+ again); 1.3.3 is an audit's fixes. Both gates in CI. Open option: band-parallel output stage (the
+removes the incubating Vector API (Java 11+ again); 1.3.3 is an audit's fixes, 1.3.4 stateless band helpers. Both gates in CI. Open option: band-parallel output stage (the
 serial remainder, ~134 ms binary on a 5.6 MP photo).

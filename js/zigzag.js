@@ -21,7 +21,7 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.3.3';
+const VERSION = '1.3.4';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
@@ -326,13 +326,15 @@ class ZigZag {
      * rows y0..y1-1 read the background mask of rows y0-r..y1+r-1, whose
      * Pass A sums read the gray levels of rows y0-2r..y1+2r-1 — so bands can
      * be computed apart (in parallel) and give exactly the whole-image values.
+     * rgba may hold only some rows, starting at row rgbaTop: those rows are
+     * ZigZag.bandRows(h, size, y0, y1).
      */
-    static foreground(rgba, w, h, size, weight, y0 = 0, y1 = h) {
+    static foreground(rgba, w, h, size, weight, y0 = 0, y1 = h, rgbaTop = 0) {
         const r = Math.floor(size / 2);
         const wf = weight / 100;
-        const top = Math.max(0, y0 - 2 * r), bot = Math.min(h, y1 + 2 * r), sh = bot - top;
+        const [top, bot] = ZigZag.bandRows(h, size, y0, y1), sh = bot - top;
         const n = w * sh;
-        const gray = ZigZag.grayImage(rgba.subarray(top * w * 4, bot * w * 4), w, sh);
+        const gray = ZigZag.grayImage(rgba.subarray((top - rgbaTop) * w * 4, (bot - rgbaTop) * w * 4), w, sh);
 
         // Pass A — background classification against the weighted local mean
         let sumAll = ZigZag.boxSum(gray, w, sh, r);
@@ -363,6 +365,12 @@ class ZigZag {
             fg[j] = (v >= meanBg || cnt === 0) ? 255 : Math.min(255, v * 256 / Math.max(1, meanBg));
         }
         return fg;
+    }
+
+    /** The source rows [top, bot) that the foreground of rows y0..y1-1 reads. */
+    static bandRows(h, size, y0, y1) {
+        const r = Math.floor(size / 2);
+        return [Math.max(0, y0 - 2 * r), Math.min(h, y1 + 2 * r)];
     }
 
     /**

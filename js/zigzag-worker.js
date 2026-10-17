@@ -16,6 +16,10 @@
  * whole-image values, so the result is bit-identical to ZigZag.process. The
  * rest — Otsu, despeckle (connected components span bands), output — runs here.
  *
+ * Helpers keep nothing: each band ships only the rows it reads (its own plus a
+ * 2r margin, ZigZag.bandRows), transferred, so no helper holds a copy of the
+ * image between runs.
+ *
  * Copyright (c) Jean-Luc Bloechle - AGPL v3
  */
 
@@ -35,18 +39,15 @@ self.onmessage = ({ data: msg }) => {
 };
 
 /** Helper: the foreground of one band, and its histogram. */
-function runBand({ job, image, y0, y1, size, weight }) {
-    if (image) source = image;
-    const { data, width: w, height: h } = source;
-    const fg = ZigZag.foreground(data, w, h, size, weight, y0, y1);
+function runBand({ job, rows, top, w, h, y0, y1, size, weight }) {
+    const fg = ZigZag.foreground(rows, w, h, size, weight, y0, y1, top);
     const hist = ZigZag.histogram(fg, w, h, 10, y0, y1);
     self.postMessage({ done: job, fg, hist }, [fg.buffer]);
 }
 
 function setImage(image) {
     source = image;
-    if (!image) stopHelpers(null);                        // released: so are the helpers' copies
-    for (const helper of helpers ?? []) helper.sent = false;   // they receive it with their next band
+    if (!image) stopHelpers(null);                        // released: start afresh next time
 }
 
 async function run({ id, opts }) {
@@ -66,10 +67,12 @@ async function parallel(image, opts) {
     const bounds = Array.from({ length: k + 1 }, (_, b) => Math.floor(h * b / k));
     const done = helpers.map((helper, b) => new Promise((resolve, reject) => {
         const job = ++jobs;
-        pending.set(job, { resolve: msg => resolve({ ...msg, y0: bounds[b] }), reject });
-        const band = { job, y0: bounds[b], y1: bounds[b + 1], size: o.size, weight: o.weight };
-        if (!helper.sent) { band.image = image; helper.sent = true; }   // copied once per image
-        helper.worker.postMessage({ band });
+        const y0 = bounds[b], y1 = bounds[b + 1];
+        const [top, bot] = ZigZag.bandRows(h, o.size, y0, y1);
+        const rows = data.slice(top * w * 4, bot * w * 4);   // the band's own copy, handed over
+        pending.set(job, { resolve: msg => resolve({ ...msg, y0 }), reject });
+        helper.postMessage({ band: { job, rows, top, w, h, y0, y1, size: o.size, weight: o.weight } },
+            [rows.buffer]);
     }));
 
     // the coordinator takes the last band while the helpers work
@@ -99,9 +102,9 @@ function startHelpers() {
                 pending.delete(data.done);
                 job?.resolve(data);
             };
-            // a failed helper fails the run (the page falls back) and the bands for good
+            // a failed helper fails the run (it falls back to serial) and the bands for good
             worker.onerror = () => stopHelpers([]);
-            helpers.push({ worker, sent: false });
+            helpers.push(worker);
         }
     } catch {
         stopHelpers([]);
@@ -112,7 +115,7 @@ function startHelpers() {
 /** Terminate the helpers and fail their bands in flight; next: null starts them
  *  again on the next large run, [] keeps the coordinator serial. */
 function stopHelpers(next) {
-    for (const helper of helpers ?? []) helper.worker.terminate();
+    for (const worker of helpers ?? []) worker.terminate();
     helpers = next;
     for (const { reject } of pending.values()) reject(new Error('band cancelled'));
     pending.clear();
