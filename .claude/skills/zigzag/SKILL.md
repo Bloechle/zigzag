@@ -100,6 +100,13 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
 - **JS**: no SIMD (WebAssembly would be a rewrite); int32 sums with `| 0`, the vertical
   pass as "row y-1 plus the entering row minus the leaving row", per-column window
   counts. Its remaining time is the divisions of Pass A and Pass B.
+- **Web app, CPU path** (1.3.1): `zigzag-worker.js` coordinates helper workers (the same
+  file) that each compute `ZigZag.foreground` for a band of rows `[y0, y1)` from the rows
+  `[y0-2r, y1+2r)` — Pass A needs r rows of mask around Pass B's window, which needs r more
+  — plus its histogram; bands assemble into exactly the whole-image values. `finish`
+  (Otsu, despeckle, output) stays serial: components cross bands. 1 MP minimum, eight cores
+  at most; the image is posted once per helper per source. `tools/app_check.py` runs the
+  app without WebGPU, so the coordinator is gated.
 - Measured and rejected: computing the Pass B division only on pixels darker than their
   background (53 % of a page are, no gain); a full 16 MB RGB→gray lookup table; a
   WebAssembly Pass B (about 1.5× the JS loop, and WASM SIMD has no float64 division to
@@ -158,6 +165,7 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
 
 ## Where this stands (2026-10-17)
 
-Version 1.3.0: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
-output, about twice as fast in Java and 1.5× in Python and JS. Both gates in CI. No open
-item from the September plan.
+Version 1.3.1: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
+output, about twice as fast in Java and 1.5× in Python and JS, and 1.3.1 spreads the app's
+CPU path over the cores. Both gates in CI. Open option: band-parallel output stage (the
+serial remainder, ~134 ms binary on a 5.6 MP photo).

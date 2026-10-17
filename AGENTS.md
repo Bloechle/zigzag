@@ -16,7 +16,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 | `ports/ZigZag.java` | Java 25+ port, single file, multi-threaded, Vector API (`--add-modules jdk.incubator.vector`), same CLI |
 | `js/zigzag.js` | Browser/Node port, dependency-free ES module; owns option resolution, Otsu and despeckle for the browser |
 | `js/zigzag-gpu.js` | WebGPU accelerator (WGSL, float32); imports those from `zigzag.js` |
-| `js/zigzag-worker.js` | Runs `zigzag.js` off the main thread |
+| `js/zigzag-worker.js` | Runs `zigzag.js` off the main thread; splits large images into row bands, one helper worker per core |
 | `index.html`, `sw.js`, `manifest.json` | The web app (PWA); `sw.js` must stay at the root |
 | `tools/parity.py` | Gate 1: the three ports agree pixel for pixel |
 | `tools/app_check.py` | Gate 2: GPU vs CPU, the app's controls, offline reload (headless Chromium) |

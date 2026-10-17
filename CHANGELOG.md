@@ -2,6 +2,14 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.1 — 2026-10-17
+
+**Same output as 1.3.0, bit for bit.** The web app's CPU path uses every core.
+
+- JS: `ZigZag.process` is now three exported stages — `foreground` (gray levels, box sums, Pass A, Pass B) for a band of rows, `histogram`, and `finish` (Otsu, despeckle, output). A band computed from its own rows plus a 2r margin on each side has exactly the whole-image values.
+- Web app: from 1 MP up, the CPU worker splits the foreground into one band per core (up to eight), computed by helper workers, and finishes alone; below 1 MP, or where a worker cannot start workers, it runs as before. 5.6 MP photo in Chromium on two cores: binary 913 → 598 ms, gray 511 → 413, color 587 → 510. Despeckle and output stay on one core (an ink component can span bands), which bounds the gain to about 1.8× on four cores.
+- The service worker cache is renewed (`zigzag-v12`).
+
 ## 1.3.0 — 2026-10-17
 
 **Same output as 1.2, bit for bit — faster.** The Java port now needs JDK 25+ and the Vector API (`java --add-modules jdk.incubator.vector ZigZag.java …`).
