@@ -13,7 +13,7 @@
 | File / folder | Content |
 |---|---|
 | [`ports/zigzag.py`](ports/zigzag.py) | Reference implementation — single file, CPU/GPU backends, full CLI |
-| [`ports/ZigZag.java`](ports/ZigZag.java) | Java implementation — single file, multi-threaded, SIMD (Vector API), same CLI |
+| [`ports/ZigZag.java`](ports/ZigZag.java) | Java implementation — single file, multi-threaded, same CLI |
 | [`js/zigzag.js`](js/zigzag.js) | Browser implementation — dependency-free ES module |
 | [`js/zigzag-gpu.js`](js/zigzag-gpu.js) | Optional WebGPU accelerator — same pipeline as WGSL compute shaders |
 | [`js/zigzag-worker.js`](js/zigzag-worker.js) | Runs the CPU port off the main thread for the web app |
@@ -76,16 +76,14 @@ python ports/zigzag.py -b cpu photo.jpg             # force a backend (auto|gpu|
 
 ## Java
 
-One file, no dependencies, multi-threaded across all cores, and the fastest port. It needs **Java 25+** and runs directly — no compilation step. Its division-bound loops (the two passes) and the 2× output run on the **Vector API**, which is still an incubator module, so the launch names it and the JVM prints a one-line notice saying so:
+One file, no dependencies, multi-threaded across all cores, and the fastest port. It needs **Java 11+** and runs directly — no compilation step, no flag:
 
 ```sh
-java --add-modules jdk.incubator.vector ports/ZigZag.java photo.jpg                 # binary, automatic size and despeckle
-java --add-modules jdk.incubator.vector ports/ZigZag.java photo.jpg --mode=color    # color foreground
-java --add-modules jdk.incubator.vector ports/ZigZag.java score.png --despeckle=0 --output=clean.png
-java --add-modules jdk.incubator.vector ports/ZigZag.java *.jpg --output=cleaned/ --time
+java ports/ZigZag.java photo.jpg                 # binary, automatic size and despeckle
+java ports/ZigZag.java photo.jpg --mode=color    # color foreground
+java ports/ZigZag.java score.png --despeckle=0 --output=clean.png
+java ports/ZigZag.java *.jpg --output=cleaned/ --time
 ```
-
-The vector code runs the scalar code's operations lane by lane, in the same order and without fused multiply-adds, so the output is bit-identical with or without it. It switches on with 256-bit vectors or wider (AVX2, AVX-512); on narrower hardware, such as ARM NEON, where the incubator API is slower than plain loops, the scalar code does the work.
 
 Options: `--mode=binary|gray|color` · `--size=N|auto` (up to 2048) · `--weight=N` · `--despeckle=N|auto` · `--threshold-offset=N` · `--output=path|dir` · `--no-upsample` · `--time` (separate load / process / save timings plus a batch summary) · `--csv=path` (per-image metrics as CSV, same columns as the Python CLI) · `--version`. Accepts multiple inputs; `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows), in file and folder names alike — e.g. `"scans/**/*.jpg"` or `"scans/*/page*.jpg"`, whose folder tree is mirrored under the output directory. Exit status as for the Python CLI.
 
@@ -153,7 +151,7 @@ The three ports carry the same version number (`zigzag.__version__`, `ZigZag.VER
 
 ## Development
 
-Two gates, both in CI. Any change to a port must keep [`tools/parity.py`](tools/parity.py) green; it needs NumPy, OpenCV, a JDK 25+ and Node 18+, and CI runs it twice, with the Java vector code on and with AVX disabled so the scalar fallback is checked too. Any change to the web app or the browser ports must keep [`tools/app_check.py`](tools/app_check.py) green; it needs Playwright (`pip install playwright && python -m playwright install chromium`). The web app is published by GitHub Pages straight from `main`, so run the app check before pushing, not after. Its service worker serves from cache first, so a release must also bump `CACHE` in [`sw.js`](sw.js), or installed copies keep the previous version.
+Two gates, both in CI. Any change to a port must keep [`tools/parity.py`](tools/parity.py) green; it needs NumPy, OpenCV, a JDK 11+ and Node 18+, and CI runs it on JDK 11, 21 and 25. Any change to the web app or the browser ports must keep [`tools/app_check.py`](tools/app_check.py) green; it needs Playwright (`pip install playwright && python -m playwright install chromium`). The web app is published by GitHub Pages straight from `main`, so run the app check before pushing, not after. Its service worker serves from cache first, so a release must also bump `CACHE` in [`sw.js`](sw.js), or installed copies keep the previous version.
 
 ## Citation
 

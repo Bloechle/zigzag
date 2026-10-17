@@ -2,6 +2,13 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.2 — 2026-10-17
+
+**Same output as 1.3.1, bit for bit. No incubator code: the Java port runs on Java 11+ again, with no flag** (`java ZigZag.java …`).
+
+- Java: the Vector API kernels are removed. The API is still incubating (eleventh round in JDK 26, twelfth in JDK 27) and will stay so until parts of Project Valhalla reach preview; a reference port should not ask its users for an incubator module and print a warning on every run. They gained about 1.3× in the Java port on AVX2 / AVX-512 hardware, nothing on ARM, and they come back unchanged (commit `e0f6fa4`, 1.3.1) once the API is final. 5.6 MP photo, binary output, two cores: 0.12 → 0.14 s, still the fastest port.
+- CI: parity on JDK 11, 21 and 25 again.
+
 ## 1.3.1 — 2026-10-17
 
 **Same output as 1.3.0, bit for bit.** The web app's CPU path uses every core.

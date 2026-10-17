@@ -12,23 +12,14 @@
  * single global Otsu threshold; ink specks below an area that scales with the
  * window are then removed (despeckle).
  *
- * Single file, no dependencies, separable rolling sums (O(n)), parallel, and
- * SIMD through the Vector API where the CPU has 256-bit vectors or wider.
- * Runs directly with Java 25+ (no compilation step); the Vector API is still
- * an incubator module, so it is named on the command line:
+ * Single file, no dependencies, separable rolling sums (O(n)) on integers,
+ * parallel across rows. Runs directly with Java (no compilation step):
  *
- *     java --add-modules jdk.incubator.vector ZigZag.java photo.jpg --mode=binary
+ *     java ZigZag.java photo.jpg --mode=binary
  *
  * Copyright (c) Jean-Luc Bloechle - AGPL v3
  */
 
-import jdk.incubator.vector.ByteVector;
-import jdk.incubator.vector.DoubleVector;
-import jdk.incubator.vector.IntVector;
-import jdk.incubator.vector.VectorMask;
-import jdk.incubator.vector.VectorOperators;
-import jdk.incubator.vector.VectorShape;
-import jdk.incubator.vector.VectorSpecies;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -38,7 +29,7 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.3.1";
+    public static final String VERSION = "1.3.2";
     public static final int OTSU_CAP = 250;
     /** Options.size / Options.despeckle value that selects the automatic rule. */
     public static final int AUTO = -1;
@@ -273,24 +264,20 @@ public class ZigZag {
             int oa = 2 * y * W, ob = oa + W;
             for (double[] row : new double[][]{ rowA, rowB }) {
                 int o = row == rowA ? oa : ob;
-                // x = 0 and x = w-1 clamp their neighbour; the inside has both
-                int x = binarizeRow(row, w, thr, out, o, 0, Math.min(1, w));
-                x = Simd.binarizeRow(row, thr, out, o, x, w - 1);
-                binarizeRow(row, w, thr, out, o, x, w);
+                binarizeRow(row, w, thr, out, o);
             }
         });
         return out;
     }
 
-    /** The two horizontal 2x samples of row pixels x0..x1-1, thresholded into
-     *  out[o + 2x] and out[o + 2x + 1]. Returns x1. */
-    static int binarizeRow(double[] row, int w, int thr, byte[] out, int o, int x0, int x1) {
-        for (int x = x0; x < x1; x++) {
+    /** The two horizontal 2x samples of each row pixel, thresholded into
+     *  out[o + 2x] and out[o + 2x + 1]; x = 0 and x = w-1 clamp their neighbour. */
+    static void binarizeRow(double[] row, int w, int thr, byte[] out, int o) {
+        for (int x = 0; x < w; x++) {
             int xa = Math.max(0, x - 1), xb = Math.min(w - 1, x + 1);
             out[o + 2 * x]     = (row[xa] * 0.25 + row[x] * 0.75) >= thr ? (byte) 255 : 0;
             out[o + 2 * x + 1] = (row[x] * 0.75 + row[xb] * 0.25) >= thr ? (byte) 255 : 0;
         }
-        return x1;
     }
 
     /** Antialiased cleanup coverage: threshold the 2x-upsampled foreground and
@@ -302,17 +289,14 @@ public class ZigZag {
         IntStream.range(0, h).parallel().forEach(y -> {
             double[] rowA = new double[w], rowB = new double[w];
             verticalRows(src, w, h, y, rowA, rowB);
-            int x = coverageRow(rowA, rowB, w, thr, cov, y * w, 0, Math.min(1, w));
-            x = Simd.coverageRow(rowA, rowB, thr, cov, y * w, x, w - 1);
-            coverageRow(rowA, rowB, w, thr, cov, y * w, x, w);
+            coverageRow(rowA, rowB, w, thr, cov, y * w);
         });
         return cov;
     }
 
-    /** White coverage of row pixels x0..x1-1 (its four 2x samples, counted).
-     *  Returns x1. */
-    static int coverageRow(double[] rowA, double[] rowB, int w, int thr, double[] cov, int o, int x0, int x1) {
-        for (int x = x0; x < x1; x++) {
+    /** White coverage of each row pixel (its four 2x samples, counted). */
+    static void coverageRow(double[] rowA, double[] rowB, int w, int thr, double[] cov, int o) {
+        for (int x = 0; x < w; x++) {
             int xa = Math.max(0, x - 1), xb = Math.min(w - 1, x + 1);
             int tl = (rowA[xa] * 0.25 + rowA[x] * 0.75) >= thr ? 1 : 0;
             int tr = (rowA[x] * 0.75 + rowA[xb] * 0.25) >= thr ? 1 : 0;
@@ -320,7 +304,6 @@ public class ZigZag {
             int br = (rowB[x] * 0.75 + rowB[xb] * 0.25) >= thr ? 1 : 0;
             cov[o + x] = (tl + tr + bl + br) * 0.25;
         }
-        return x1;
     }
 
     /** The vertical pass of the 2x upsampling for source row y: rowA holds
@@ -365,12 +348,7 @@ public class ZigZag {
         byte[] maskCnt = new byte[n];       // 1 where background, else 0
         IntStream.range(0, h).parallel().forEach(y -> {
             int cy = Math.min(h - 1, y + r) - Math.max(0, y - r) + 1;
-            int base = y * w;
-            // the window is whole between x = r and w-1-r: one divisor, SIMD there
-            int inFrom = Math.min(r, w), inTo = Math.max(inFrom, w - r);
-            int x = background(gray, sumAll, wf, w, r, cy, maskVal, maskCnt, base, 0, inFrom);
-            x = Simd.background(gray, sumAll, wf, (2 * r + 1) * cy, maskVal, maskCnt, base + x, base + inTo) - base;
-            background(gray, sumAll, wf, w, r, cy, maskVal, maskCnt, base, x, w);
+            background(gray, sumAll, wf, w, r, cy, maskVal, maskCnt, y * w);
         });
 
         // Pass B - normalization against the local mean of background-only pixels
@@ -503,11 +481,11 @@ public class ZigZag {
         parent[rb] = ra;
     }
 
-    /** Pass A for pixels x0..x1-1 of the row at base: background where the gray
-     *  level reaches the weighted mean of its (clamped) window. Returns x1. */
-    static int background(byte[] gray, int[] sumAll, double wf, int w, int r, int cy,
-                          byte[] maskVal, byte[] maskCnt, int base, int x0, int x1) {
-        for (int x = x0; x < x1; x++) {
+    /** Pass A for the row at base: background where the gray level reaches the
+     *  weighted mean of its (clamped) window. */
+    static void background(byte[] gray, int[] sumAll, double wf, int w, int r, int cy,
+                           byte[] maskVal, byte[] maskCnt, int base) {
+        for (int x = 0; x < w; x++) {
             int i = base + x;
             int cx = Math.min(w - 1, x + r) - Math.max(0, x - r) + 1;
             if ((gray[i] & 0xFF) >= wf * sumAll[i] / (cx * cy)) {
@@ -515,7 +493,6 @@ public class ZigZag {
                 maskCnt[i] = 1;
             }
         }
-        return x1;
     }
 
     /** Pass B: fg = 255 if v >= mean_bg else v*256/mean_bg; all-foreground
@@ -523,13 +500,12 @@ public class ZigZag {
     static double[] normalize(byte[] gray, int[] sumBg, int[] cntBg, int w, int h) {
         double[] fg = new double[w * h];
         IntStream.range(0, h).parallel().forEach(y -> {
-            int from = Simd.foreground(gray, sumBg, cntBg, fg, y * w, (y + 1) * w);
-            foreground(gray, sumBg, cntBg, fg, from, (y + 1) * w);
+            foreground(gray, sumBg, cntBg, fg, y * w, (y + 1) * w);
         });
         return fg;
     }
 
-    /** Scalar Pass B for pixels from..to-1; also the reference for Simd. */
+    /** Pass B for pixels from..to-1. */
     static void foreground(byte[] gray, int[] sumBg, int[] cntBg, double[] fg, int from, int to) {
         for (int i = from; i < to; i++) {
             int cnt = cntBg[i];
@@ -539,123 +515,9 @@ public class ZigZag {
         }
     }
 
-    /** Vector API versions of the hot loops: Pass A, Pass B (6-7x faster there)
-     *  and the 2x binarization. Each lane runs the scalar code's operations in
-     *  the same order — IEEE multiply, add, divide, compare, never a fused
-     *  multiply-add — so the result is bit-identical. Gray levels are read 8 bytes at a time and
-     *  spread over 1, 2 or 4 double vectors. Below 256-bit vectors (e.g. ARM
-     *  NEON) the API falls back to a slow path, so the kernels step aside and
-     *  return their start index: the scalar loop then does all the work. */
-    static final class Simd {
-        static final VectorSpecies<Double> D = DoubleVector.SPECIES_PREFERRED;
-        static final VectorSpecies<Integer> I =
-                VectorSpecies.of(int.class, VectorShape.forBitSize(D.vectorBitSize() / 2));
-        static final VectorSpecies<Byte> B = ByteVector.SPECIES_64;
-        static final int L = D.length(), PARTS = 8 / Math.max(1, L);
-        static final boolean ON = L >= 4 && L <= 8;
-        /** Two output bytes per lane: the even and odd 2x samples, interleaved. */
-        static final VectorSpecies<Byte> B2 =
-                VectorSpecies.of(byte.class, VectorShape.forBitSize(Math.max(64, 16 * L)));
-        static final long EVEN = 0x5555555555555555L, ODD = 0xAAAAAAAAAAAAAAAAL;
-
-        /** Pass A over pixels from..to-1, all with the same window size den;
-         *  returns the first pixel left to the scalar loop. */
-        static int background(byte[] gray, int[] sumAll, double wf, int den,
-                              byte[] maskVal, byte[] maskCnt, int from, int to) {
-            if (!ON) return from;
-            DoubleVector f = DoubleVector.broadcast(D, wf), d = DoubleVector.broadcast(D, den);
-            ByteVector zero = ByteVector.zero(B), one = ByteVector.broadcast(B, (byte) 1);
-            int i = from;
-            for (; i <= to - 8; i += 8) {
-                ByteVector g = ByteVector.fromArray(B, gray, i);
-                long bits = 0;
-                for (int p = 0; p < PARTS; p++) {
-                    DoubleVector v = (DoubleVector) g.convertShape(VectorOperators.ZERO_EXTEND_B2I, I, p)
-                            .convertShape(VectorOperators.I2D, D, 0);
-                    DoubleVector s = (DoubleVector) IntVector.fromArray(I, sumAll, i + p * L)
-                            .convertShape(VectorOperators.I2D, D, 0);
-                    bits |= v.compare(VectorOperators.GE, f.mul(s).div(d)).toLong() << (p * L);
-                }
-                VectorMask<Byte> paper = VectorMask.fromLong(B, bits);
-                g.blend(zero, paper.not()).intoArray(maskVal, i);
-                one.blend(zero, paper.not()).intoArray(maskCnt, i);
-            }
-            return i;
-        }
-
-        /** binarizeRow for x0..x1-1, all with both neighbours inside the row;
-         *  returns the first pixel left to the scalar loop. The even and odd
-         *  samples' masks are interleaved bit by bit (Long.expand, pdep on x86)
-         *  and written as 2L bytes at once. */
-        static int binarizeRow(double[] row, int thr, byte[] out, int o, int x0, int x1) {
-            if (!ON) return x0;
-            DoubleVector q = DoubleVector.broadcast(D, 0.25), t = DoubleVector.broadcast(D, 0.75);
-            DoubleVector th = DoubleVector.broadcast(D, thr);
-            ByteVector black = ByteVector.zero(B2);
-            int x = x0;
-            for (; x <= x1 - L; x += L) {
-                DoubleVector left = DoubleVector.fromArray(D, row, x - 1);
-                DoubleVector mid = DoubleVector.fromArray(D, row, x);
-                DoubleVector right = DoubleVector.fromArray(D, row, x + 1);
-                long even = left.mul(q).add(mid.mul(t)).compare(VectorOperators.GE, th).toLong();
-                long odd = mid.mul(t).add(right.mul(q)).compare(VectorOperators.GE, th).toLong();
-                long bits = Long.expand(even, EVEN) | Long.expand(odd, ODD);
-                black.blend((byte) 255, VectorMask.fromLong(B2, bits)).intoArray(out, o + 2 * x);
-            }
-            return x;
-        }
-
-        /** coverageRow for x0..x1-1, all with both neighbours inside the row;
-         *  returns the first pixel left to the scalar loop. */
-        static int coverageRow(double[] rowA, double[] rowB, int thr, double[] cov, int o, int x0, int x1) {
-            if (!ON) return x0;
-            DoubleVector q = DoubleVector.broadcast(D, 0.25), t = DoubleVector.broadcast(D, 0.75);
-            DoubleVector th = DoubleVector.broadcast(D, thr), zero = DoubleVector.zero(D);
-            int x = x0;
-            for (; x <= x1 - L; x += L) {
-                DoubleVector n = zero;
-                for (double[] row : new double[][]{ rowA, rowB }) {
-                    DoubleVector left = DoubleVector.fromArray(D, row, x - 1);
-                    DoubleVector mid = DoubleVector.fromArray(D, row, x);
-                    DoubleVector right = DoubleVector.fromArray(D, row, x + 1);
-                    n = n.add(1, left.mul(q).add(mid.mul(t)).compare(VectorOperators.GE, th));
-                    n = n.add(1, mid.mul(t).add(right.mul(q)).compare(VectorOperators.GE, th));
-                }
-                n.mul(q).intoArray(cov, o + x);
-            }
-            return x;
-        }
-
-        /** Pass B over pixels from..to-1; returns the first pixel left to the
-         *  scalar loop. */
-        static int foreground(byte[] gray, int[] sumBg, int[] cntBg, double[] fg, int from, int to) {
-            if (!ON) return from;
-            DoubleVector c255 = DoubleVector.broadcast(D, 255), c256 = DoubleVector.broadcast(D, 256);
-            DoubleVector one = DoubleVector.broadcast(D, 1), zero = DoubleVector.zero(D);
-            int i = from;
-            for (; i <= to - 8; i += 8) {
-                ByteVector g = ByteVector.fromArray(B, gray, i);
-                for (int p = 0; p < PARTS; p++) {
-                    int j = i + p * L;
-                    DoubleVector v = (DoubleVector) g.convertShape(VectorOperators.ZERO_EXTEND_B2I, I, p)
-                            .convertShape(VectorOperators.I2D, D, 0);
-                    DoubleVector c = (DoubleVector) IntVector.fromArray(I, cntBg, j)
-                            .convertShape(VectorOperators.I2D, D, 0);
-                    DoubleVector s = (DoubleVector) IntVector.fromArray(I, sumBg, j)
-                            .convertShape(VectorOperators.I2D, D, 0);
-                    VectorMask<Double> none = c.compare(VectorOperators.EQ, 0);
-                    DoubleVector mean = s.div(c).blend(zero, none);
-                    DoubleVector q = v.mul(c256).div(mean.max(one)).min(c255);
-                    q.blend(c255, v.compare(VectorOperators.GE, mean).or(none)).intoArray(fg, j);
-                }
-            }
-            return i;
-        }
-    }
-
     // -- CLI ------------------------------------------------------------------
 
-    static final String USAGE = "Usage: java --add-modules jdk.incubator.vector ZigZag.java <inputs...> [--output=path|dir] "
+    static final String USAGE = "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
             + "[--mode=binary|gray|color] [--size=N|auto] [--weight=N] [--threshold-offset=N] "
             + "[--despeckle=N|auto] "
             + "[--no-upsample] [--time] [--csv=path] [--version]";

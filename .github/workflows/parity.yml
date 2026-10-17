@@ -16,9 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # the Java port needs JDK 25+ (Vector API). "scalar" turns AVX off, so the
-        # Vector API reports 128-bit vectors and the scalar fallback is checked too
-        vectors: [native, scalar]
+        java: [11, 21, 25]   # the README promises Java 11+; 21 and 25 are the current LTS
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +27,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 25
+          java-version: ${{ matrix.java }}
 
       - uses: actions/setup-node@v4
         with:
@@ -39,5 +37,3 @@ jobs:
 
       - name: Python, Java and JS must agree pixel for pixel
         run: python tools/parity.py
-        env:
-          JAVA_TOOL_OPTIONS: ${{ matrix.vectors == 'scalar' && '-XX:UseAVX=0' || '' }}

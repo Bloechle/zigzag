@@ -1,6 +1,6 @@
 ---
 name: zigzag
-description: "Develop Jean-Luc Bloechle's ZigZag repository (Bloechle/zigzag, public, AGPL): the document binarization algorithm of DocEng 2024 in three bit-identical ports (ports/zigzag.py, ports/ZigZag.java on JDK 25 + Vector API, js/zigzag.js), the WebGPU accelerator (js/zigzag-gpu.js), the PWA web app (index.html, sw.js) published by GitHub Pages, and its two gates (tools/parity.py, tools/app_check.py). Use it for any change to a port, the app, the gates, the defaults (automatic size, despeckle, weight), a release or the docs of this repo. Benchmarking ZigZag against other methods (binbench, db50, the sweeps behind the defaults, DocEng/ICDAR competitions) is NOT here: it lives in the private repository Bloechle/UniFR (skill zigzag-eval)."
+description: "Develop Jean-Luc Bloechle's ZigZag repository (Bloechle/zigzag, public, AGPL): the document binarization algorithm of DocEng 2024 in three bit-identical ports (ports/zigzag.py, ports/ZigZag.java on Java 11+, js/zigzag.js), the WebGPU accelerator (js/zigzag-gpu.js), the PWA web app (index.html, sw.js) published by GitHub Pages, and its two gates (tools/parity.py, tools/app_check.py). Use it for any change to a port, the app, the gates, the defaults (automatic size, despeckle, weight), a release or the docs of this repo. Benchmarking ZigZag against other methods (binbench, db50, the sweeps behind the defaults, DocEng/ICDAR competitions) is NOT here: it lives in the private repository Bloechle/UniFR (skill zigzag-eval)."
 ---
 
 # ZigZag — working on the repository
@@ -55,8 +55,8 @@ them here.
 ## How the ports stay identical
 
 `tools/parity.py` is the proof (13 images × 3 modes × 6 parameter sets × 2 ports = 468
-comparisons, plus the size rule on ~10 000 dimensions; CI runs it twice, the second time
-with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies on:
+comparisons, plus the size rule on ~10 000 dimensions; CI runs it on JDK 11, 21 and 25).
+What it relies on:
 
 - **Same float64 operations, same order** wherever the values are not integers:
   `a*(1-f) + b*f` with the vertical pass before the horizontal one; the 2× upsampling at
@@ -83,16 +83,20 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
 
 ## Speed: what is done, and where it is (1.3)
 
-5.6 MP photo, binary output, two cores: Python 0.53 s, JS 0.35 s, Java 0.12 s.
+5.6 MP photo, binary output, two cores: Python 0.53 s, JS 0.35 s, Java 0.14 s.
 
-- **Java, Vector API** (`jdk.incubator.vector`, JDK 25+): nested class `Simd` holds the
-  kernels for Pass A (interior of each row, where the window is whole and the divisor
-  constant), Pass B, the 2× binarization and the gray/color coverage. Gray bytes are
-  read 8 at a time and spread over 1, 2 or 4 double vectors (`ZERO_EXTEND_B2I` then
-  `I2D`, per part). The 2× even/odd masks are interleaved with `Long.expand` (pdep) and
-  written as `2L` bytes. Each kernel returns the index where it stopped; the scalar
-  helper (`background`, `foreground`, `binarizeRow`, `coverageRow`) does the edges and
-  the tail, and is the reference the kernel must equal.
+- **No incubator or preview code, in any port** (Jean-Luc's rule). The Java port had
+  Vector API kernels in 1.3.0–1.3.1 (Pass A, Pass B, the 2× binarization, the coverage):
+  about 1.3× in Java on AVX2 / AVX-512, nothing on ARM. Removed in 1.3.2 while the API
+  incubates (it waits for Valhalla to reach preview); they are in commit `e0f6fa4` (1.3.1), bit-identical
+  to the scalar loops, and can return once the API is final. When they do: species as
+  `static final` constants (built at run time, every operation leaves the intrinsic path
+  and the loop runs 3–30× slower than scalar); kernels only with 4–8 double lanes
+  (slower than plain loops below 256 bits); no fused multiply-add; measure each kernel
+  against its scalar twin, and run parity with `-XX:UseAVX=0` too.
+- **Java**: integer box sums sharing their scratch buffers, rows in parallel
+  (`IntStream.parallel`), gray straight from the JPEG raster bytes, the color output
+  written into the raster.
 - **Python**: the 2× samples only around the ink. A sample reads the 3×3 neighbourhood;
   when all nine values are ≥ the (integer) threshold the sample is too — T/4 and 3T/4 are
   exact and rounding is monotonic — so paper needs no arithmetic. The converse does not
@@ -133,20 +137,10 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
   default move to Auto (`PREFS_VERSION`).
 - A browser that refuses the 2× canvas gets 1×, never a blank result.
 - f-strings with a backslash inside `{}` need Python 3.12; the CLI stays 3.8-compatible.
-- Vector API species must be `static final` constants: built at run time (a non-final
-  field) every operation falls off the intrinsic path and the "SIMD" loop runs 3-30×
-  SLOWER than the scalar one. Measure every kernel against its scalar twin.
-- Below 256-bit vectors (`-XX:UseAVX=0`, ARM NEON) the incubator API is slower than plain
-  loops: `Simd.ON` requires 4 to 8 double lanes and otherwise every kernel returns its
-  start index. A 4-lane byte vector does not exist (no 32-bit shape), hence the 8-byte
-  loads split into parts.
-- `java ZigZag.java` needs `--add-modules jdk.incubator.vector` for compiling and running,
-  and the JVM prints "WARNING: Using incubator modules" on stderr; the harness passes the
-  flag to `javac` and `java`.
 - Java lambdas only capture effectively-final locals: do not null an array (to free it)
   that a lambda in the same method reads.
-- The sandbox's JDK may be older: `apt-get update && apt-get install openjdk-25-jdk-headless`
-  then `update-alternatives --set java|javac` to the 25 binaries.
+- The Java port must compile with `javac --release 11`: check it after any Java change
+  (CI's JDK 11 job does too).
 - `sw.js` must stay at the root (Pages cannot set `Service-Worker-Allowed`).
 - Award wording: SIGWEB DocEng Best Paper Award (the Engelbart award is Hypertext's).
 - IntelliJ builds into `out/`; it stays in `.gitignore`.
@@ -165,7 +159,7 @@ with `-XX:UseAVX=0` so the Java scalar fallback is checked too). What it relies 
 
 ## Where this stands (2026-10-17)
 
-Version 1.3.1: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
-output, about twice as fast in Java and 1.5× in Python and JS, and 1.3.1 spreads the app's
-CPU path over the cores. Both gates in CI. Open option: band-parallel output stage (the
+Version 1.3.2: automatic size (1.1) and despeckle (1.2) are the defaults; 1.3 is the same
+output, faster in all ports, 1.3.1 spreads the app's CPU path over the cores, and 1.3.2
+removes the incubating Vector API (Java 11+ again). Both gates in CI. Open option: band-parallel output stage (the
 serial remainder, ~134 ms binary on a 5.6 MP photo).

@@ -13,7 +13,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 | Path | What |
 |---|---|
 | `ports/zigzag.py` | Reference port: NumPy + OpenCV, optional CuPy GPU backend, CLI |
-| `ports/ZigZag.java` | Java 25+ port, single file, multi-threaded, Vector API (`--add-modules jdk.incubator.vector`), same CLI |
+| `ports/ZigZag.java` | Java 11+ port, single file, multi-threaded, same CLI |
 | `js/zigzag.js` | Browser/Node port, dependency-free ES module; owns option resolution, Otsu and despeckle for the browser |
 | `js/zigzag-gpu.js` | WebGPU accelerator (WGSL, float32); imports those from `zigzag.js` |
 | `js/zigzag-worker.js` | Runs `zigzag.js` off the main thread; splits large images into row bands, one helper worker per core |
@@ -34,6 +34,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
   previous output, regenerate `examples/*_ZZ.png`.
 - **Every release that touches the app bumps `CACHE` in `sw.js`**, or installed copies
   keep the old version.
+- **No incubator or preview code** in any port (the Java port stays on Java 11+, no flag).
 - **The repository is public.** It states what anyone can check from it alone (algorithm,
   defaults and their rules, speed, parity). Comparisons with other methods, scores, sweeps
   and competition notes live in the private `Bloechle/UniFR` (`zigzag/`); no personal data.
@@ -42,7 +43,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 
 ```sh
 pip install numpy opencv-python-headless playwright && python -m playwright install chromium
-python tools/parity.py       # needs a JDK 25+ and Node 18+
+python tools/parity.py       # needs a JDK 11+ and Node 18+
 python tools/app_check.py
 ```
 

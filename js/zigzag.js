@@ -21,7 +21,7 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
