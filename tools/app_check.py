@@ -35,7 +35,7 @@ GPU_VS_CPU = """async () => {
     const { ZigZag } = await import('./js/zigzag.js');
     const { ZigZagGPU } = await import('./js/zigzag-gpu.js');
     if (!ZigZagGPU.isSupported()) return null;
-    const bmp = await createImageBitmap(await (await fetch('examples/02_04.jpg')).blob());
+    const bmp = await createImageBitmap(await (await fetch('examples/01_letter.jpg')).blob());
     const ctx = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d');
     ctx.drawImage(bmp, 0, 0);
     const img = ctx.getImageData(0, 0, bmp.width, bmp.height);

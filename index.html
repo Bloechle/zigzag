@@ -594,8 +594,10 @@
     async function toImageData(src, budget) {
         const n = src.width * src.height;
         const s = n > budget ? Math.sqrt(budget / n) : 1;
-        const w = Math.max(1, Math.round(src.width * s));
-        const h = Math.max(1, Math.round(src.height * s));
+        // floor, not round: rounded up, w * h could stay above the budget and the
+        // shrink-for-the-CPU path would shrink the same image again, forever
+        const w = Math.max(1, Math.floor(src.width * s));
+        const h = Math.max(1, Math.floor(src.height * s));
         const c = document.createElement('canvas');
         c.width = w; c.height = h;
         const ctx = c.getContext('2d', { willReadFrequently: true });
@@ -896,7 +898,7 @@
     el.btnExample.addEventListener('click', async () => {
         el.btnExample.disabled = true;
         try {
-            const r = await fetch('examples/02_04.jpg');
+            const r = await fetch('examples/01_letter.jpg');
             if (!r.ok) throw new Error(r.status);
             await loadBlob(await r.blob(), 'example.jpg');
         } catch {

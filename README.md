@@ -2,7 +2,7 @@
 
 # ZigZag
 
-**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built on running box sums, it is fast, accurate and simple: a 5.6 MP phone photo takes about 0.14 s in Java, 0.35 s in JavaScript and 0.5 s in Python on two CPU cores.
+**ZigZag** is a robust, machine-learning-free algorithm for **document image binarization** and **background removal**, designed for photos captured under difficult, non-uniform lighting. Built on running box sums, it is fast, accurate and simple: a 5.4 MP document photo takes about 0.14 s in Java, 0.33 s in JavaScript and 0.47 s in Python on two CPU cores.
 
 **[▶ Try the live demo](https://bloechle.github.io/zigzag/)** — runs entirely in your browser, no upload.
 
@@ -138,12 +138,16 @@ python -m http.server   # then open http://localhost:8000
 
 ## Examples
 
-[`examples/`](examples/) contains sample document photos taken under poor lighting and their binarized outputs, generated with the default settings of the current version:
+[`examples/`](examples/) holds six document photos under difficult light and their binarized outputs (`*_ZZ.png`), made with the default settings of the current version. The pages are our own: original text, rendered, printed and photographed in simulation (paper texture, ink spread, lighting, lens and sensor, JPEG), so they can be shared freely under the repository's licence.
 
-| Input | Output |
+| Photo | What it shows |
 |---|---|
-| `02_04.jpg` | `02_04_ZZ.png` |
-| `10_18.jpg` | `10_18_ZZ.png` |
+| [`01_letter.jpg`](examples/01_letter.jpg) | a signed letter in a cast shadow (5.4 MP, the web app's example) |
+| [`02_timetable.jpg`](examples/02_timetable.jpg) | tables with shaded rows, a shadow and a flash spot |
+| [`03_manual.jpg`](examples/03_manual.jpg) | a page printed with weak toner, in a shadow |
+| [`04_form.jpg`](examples/04_form.jpg) | a filled-in form on crumpled paper |
+| [`05_study.jpg`](examples/05_study.jpg) | highlighter and a stamp — try `--mode=color` |
+| [`06_poster.jpg`](examples/06_poster.jpg) | a notice under a strong flash |
 
 ## Versions
 

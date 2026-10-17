@@ -37,7 +37,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 - **No incubator or preview code** in any port (the Java port stays on Java 11+, no flag).
 - **The repository is public.** It states what anyone can check from it alone (algorithm,
   defaults and their rules, speed, parity). Comparisons with other methods, scores, sweeps
-  and competition notes live in the private `Bloechle/UniFR` (`zigzag/`); no personal data.
+  and competition notes live in the private `Bloechle/UniFR` (`research/zigzag/`); no personal data.
 
 ## Gates
 

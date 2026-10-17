@@ -2,6 +2,14 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.5 — 2026-10-17
+
+**Same output as 1.3.4, bit for bit.** New examples.
+
+- `examples/`: six document photos of our own replace the two former ones, which came from a third-party dataset. The pages carry original text (a letter, a timetable, a manual, a filled-in form, a highlighted revision sheet, a notice) and are photographed in simulation under different lights: cast shadow, flash, weak toner, crumpled paper. Each comes with its default output.
+- Web app: "try an example" opens `01_letter.jpg`. Fixed: without WebGPU, a photo whose downscaled size rounded up past the 4 MP CPU budget (1968×2730, for one) was shrunk again and again and froze the page; the size is now rounded down.
+- README: speed quoted on that photo (5.4 MP): about 0.14 s in Java, 0.33 s in JavaScript, 0.47 s in Python on two cores.
+
 ## 1.3.4 — 2026-10-17
 
 **Same output as 1.3.3, bit for bit.**
