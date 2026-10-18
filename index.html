@@ -170,7 +170,7 @@
             background: rgba(20, 20, 22, .85); border-top: 1px solid var(--border);
             backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
         }
-        .bottom-bar > * { max-width: 520px; margin-inline: auto; }
+        .bar { max-width: 520px; margin-inline: auto; }
         .mode-row {
             display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px;
             background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
@@ -182,16 +182,30 @@
         }
         .mode-btn.active { background: var(--accent); color: #fff; }
 
-        .action-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; }
+        .action-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
         .action-btn {
-            display: flex; flex-direction: column; align-items: center; gap: 4px;
-            padding: 8px 2px 6px; border-radius: 9px; font-size: .66rem; color: var(--dim);
-            transition: background .15s;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+            padding: 8px 2px 6px; border-radius: 10px; font-size: .66rem; color: var(--dim);
+            transition: background .15s, color .15s;
         }
         .action-btn:active { background: var(--bg-hover); }
         .action-btn:disabled { opacity: .35; }
-        .action-btn.accent { color: var(--accent-soft); }
+        .action-btn[aria-expanded="true"] { background: var(--bg-hover); color: var(--accent-soft); }
+        .action-btn.primary { background: var(--accent); color: #fff; font-weight: 600; }
         .action-btn > [class^="icon-"] { display: flex; }
+        @media (hover: hover) {
+            .action-btn:hover:not(:disabled), .mode-btn:not(.active):hover { background: var(--bg-hover); color: var(--text); }
+            .action-btn.primary:hover:not(:disabled) { background: #0a64ad; color: #fff; }
+        }
+        /* wide screens: one row, the output pair on the left, the actions on the right */
+        @media (min-width: 720px) {
+            .bar { max-width: 860px; display: flex; align-items: center; gap: 16px; }
+            .mode-row { margin: 0; width: 200px; flex-shrink: 0; }
+            .action-row { flex: 1; display: flex; justify-content: flex-end; }
+            .action-btn { flex-direction: row; gap: 8px; padding: 10px 14px; font-size: .82rem; }
+            .action-btn svg { width: 18px; height: 18px; }
+            .action-btn.primary { margin-left: 8px; padding-inline: 18px; }
+        }
 
         /* ═══ SETTINGS SHEET ═══ */
         #sheet { position: fixed; inset: 0; z-index: 60; }
@@ -217,6 +231,24 @@
             transition: background .15s, color .15s, border-color .15s;
         }
         .sheet-help[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+        .sheet-close { width: 28px; height: 28px; border-radius: 50%; color: var(--dim); display: flex; align-items: center; justify-content: center; }
+        @media (hover: hover) { .sheet-close:hover { background: var(--bg-hover); color: var(--text); } }
+
+        /* desktop: a floating card at the top right; the page stays live behind it
+           (no backdrop), so the comparison can be dragged while tuning */
+        @media (min-width: 900px) and (hover: hover) {
+            #sheet { pointer-events: none; }
+            .sheet-backdrop, .sheet-drag-bar { display: none; }
+            .sheet-panel {
+                pointer-events: auto;
+                left: auto; right: 16px; bottom: auto; top: calc(16px + var(--safe-t));
+                width: 340px; padding: 16px 20px 6px;
+                border: 1px solid var(--border); border-radius: 16px;
+                box-shadow: 0 16px 48px rgba(0, 0, 0, .5);
+            }
+            #sheet.hidden-anim .sheet-panel { transform: translateX(calc(100% + 24px)); }
+            .param-row { grid-template-columns: 82px 1fr 46px; }
+        }
 
         .param-row { display: grid; grid-template-columns: 88px 1fr 50px; align-items: center; gap: 12px; margin-bottom: 14px; }
         .param-row label { font-size: .8rem; color: var(--dim); }
@@ -304,7 +336,7 @@
         <div id="spinner" class="hidden"><div class="spinner-ring"></div></div>
     </div>
 
-    <div class="bottom-bar">
+    <div class="bottom-bar"><div class="bar">
         <div class="mode-row" id="modeRow" role="group" aria-label="Output">
             <button class="mode-btn active" data-mode="binary" aria-pressed="true" title="Black and white (1)">B&amp;W</button>
             <button class="mode-btn" data-mode="gray" aria-pressed="false" title="Grayscale (2)">Gray</button>
@@ -327,12 +359,12 @@
                 <span class="icon-copy"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
                 <span class="lbl">Copy</span>
             </button>
-            <button id="btnSave" class="action-btn accent" title="Save PNG (S)" disabled>
+            <button id="btnSave" class="action-btn primary" title="Save PNG (S)" disabled>
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 <span>Save</span>
             </button>
         </div>
-    </div>
+    </div></div>
 
     <div id="sheet" class="hidden hidden-anim" role="region" aria-label="Settings">
         <div class="sheet-backdrop" id="sheetBackdrop"></div>
@@ -344,6 +376,9 @@
                     <button id="btnHints" class="sheet-help" aria-pressed="false"
                             aria-label="Explain these settings" title="Explain these settings">?</button>
                     <button id="btnReset" class="sheet-reset">Reset</button>
+                    <button id="btnCloseSheet" class="sheet-close" aria-label="Close settings" title="Close (T)">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+                    </button>
                 </div>
             </div>
             <div class="param-row">
@@ -405,7 +440,7 @@
      'canvasOriginal', 'canvasResult', 'infoBadge', 'spinner', 'gpuStatus',
      'btnCamera', 'btnGallery', 'btnExample',
      'btnNew', 'btnRotate', 'btnTune', 'btnShare', 'btnSave',
-     'modeRow', 'sheet', 'sheetBackdrop', 'sheetPanel', 'btnReset',
+     'modeRow', 'sheet', 'sheetBackdrop', 'sheetPanel', 'btnReset', 'btnCloseSheet',
      'slSize', 'slWeight', 'slThr', 'valSize', 'valWeight', 'valThr', 'btnHints',
      'swSpecks', 'valSpecks',
      'dropOverlay', 'fileCamera', 'fileGallery'].forEach(id => el[id] = $(id));
@@ -968,9 +1003,12 @@
     });
 
     // ── settings sheet ──
+    // desktop: the panel floats at the top right (see the CSS) and leaves the badge alone
+    const sheetFloats = matchMedia('(min-width: 900px) and (hover: hover)');
+
     /** Lift the info badge by how far the panel intrudes into the viewport. */
     function liftBadge() {
-        const intrusion = el.viewport.getBoundingClientRect().bottom
+        const intrusion = sheetFloats.matches ? 0 : el.viewport.getBoundingClientRect().bottom
             - (innerHeight - el.sheetPanel.offsetHeight);
         el.app.style.setProperty('--sheet-h', Math.max(0, intrusion) + 'px');
     }
@@ -998,6 +1036,7 @@
         savePrefs();
     });
     el.sheetBackdrop.addEventListener('click', () => showSheet(false));
+    el.btnCloseSheet.addEventListener('click', () => showSheet(false));
 
     function setSpecks(on) {
         el.swSpecks.checked = on;
@@ -1026,7 +1065,7 @@
     // swipe the panel down to dismiss
     let sheetDragY = null;
     el.sheetPanel.addEventListener('pointerdown', e => {
-        if (e.target.closest('button')) return;   // never swallow Reset / help taps
+        if (sheetFloats.matches || e.target.closest('button')) return;   // never swallow Reset / help taps
         if (!e.target.closest('.sheet-drag-bar, .sheet-head')) return;
         sheetDragY = e.clientY;
         el.sheetPanel.setPointerCapture(e.pointerId);

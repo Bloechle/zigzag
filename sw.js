@@ -2,7 +2,7 @@
 // Strategy: stale-while-revalidate (instant load, background refresh).
 // Bump CACHE on every deploy to force a full refresh.
 
-const CACHE = 'zigzag-v18';
+const CACHE = 'zigzag-v19';
 const SHARED = 'zigzag-shared';   // an image shared to the app, until index.html takes it
 const SHELL = [
     './',

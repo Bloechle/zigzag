@@ -2,6 +2,14 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.8 — 2026-10-18
+
+**Same output as 1.3.7, bit for bit.** Web app only: the toolbar and the settings.
+
+- Save is the primary button (filled); Tune stays highlighted while the settings are open; actions and modes react to the mouse.
+- Wide screens (720 px and more): one toolbar row, B&W / Gray on the left and the actions, labelled beside their icons, on the right.
+- Desktop: the settings float as a card at the top right instead of a sheet over the bottom of the page; the page stays live behind it, so the comparison can be dragged while tuning. A close button joins the sheet's header (phones keep the swipe and the tap outside).
+
 ## 1.3.7 — 2026-10-18
 
 **Same output as 1.3.6, bit for bit.** Web app only, after a full audit.
