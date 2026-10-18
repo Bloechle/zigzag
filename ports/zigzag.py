@@ -45,7 +45,7 @@ except Exception:
     cp = None
     HAS_GPU = False
 
-__version__ = '1.3.5'
+__version__ = '1.3.6'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
 MAX_SIZE = 2048     # keeps 255 * (size + 1)² inside the int32 box sums of the other ports

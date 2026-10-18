@@ -27,7 +27,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 | `index.html`, `sw.js`, `manifest.json` | The web app (PWA); `sw.js` must stay at the root |
 | `tools/parity.py` | Gate 1: the three ports agree pixel for pixel |
 | `tools/app_check.py` | Gate 2: GPU vs CPU, the app's controls, offline reload (headless Chromium) |
-| `examples/` | Two photos and their outputs at the current defaults |
+| `examples/` | Six photos and their outputs at the current defaults |
 | `CHANGELOG.md`, `CITATION.cff` | Version history; citation metadata |
 
 ## Rules never to break

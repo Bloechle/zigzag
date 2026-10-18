@@ -30,7 +30,7 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.3.5";
+    public static final String VERSION = "1.3.6";
     public static final int OTSU_CAP = 250;
     /** Options.size / Options.despeckle value that selects the automatic rule. */
     public static final int AUTO = -1;

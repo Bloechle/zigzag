@@ -125,13 +125,16 @@ async def main():
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: m.type == "error" and errors.append(m.text))
         await page.goto(url + "index.html")
-        # settings saved by 1.1 (Window still on the old 30 px default) move to Auto
+        # settings saved by 1.1 (Window still on the old 30 px default) move to Auto;
+        # a Color mode saved before 1.3.6 (the app no longer offers it) opens in B&W
         await page.evaluate("localStorage.setItem('zigzag.prefs', JSON.stringify("
-                            "{mode: 'binary', size: 30, weight: 90, thr: 0}))")
+                            "{mode: 'color', size: 30, weight: 90, thr: 0}))")
         await page.reload()
         await page.wait_for_function("document.getElementById('gpuStatus').textContent !== ''")
         c.ok("WebGPU" in await page.inner_text("#gpuStatus"), "GPU backend detected")
         c.ok(await page.inner_text("#valSize") == "Auto", "old default Window migrated to Auto")
+        c.ok(await page.get_attribute(".mode-btn.active", "data-mode") == "binary"
+             and not await page.query_selector("[data-mode=color]"), "saved Color mode opens in B&W")
 
         await page.click("#btnExample")
         badge = await badge_with(page, " ms")

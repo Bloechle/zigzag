@@ -2,6 +2,14 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.6 — 2026-10-18
+
+**Same output as 1.3.5, bit for bit.** Web app only.
+
+- The app offers B&W and Gray; Color stays in the three ports, their command lines and the WebGPU accelerator. A saved Color preference opens in B&W.
+- On a landscape screen the preview opens on the whole page instead of its full width; phones are unchanged. The mode row, the actions and the settings sheet keep a phone-like width on wide screens instead of spanning the window.
+- Fixed: the Copy label sat lower than the other actions.
+
 ## 1.3.5 — 2026-10-17
 
 **Same output as 1.3.4, bit for bit.** New examples.
