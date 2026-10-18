@@ -2,8 +2,15 @@
 
 Document image binarization and background removal (ACM DocEng 2024, best paper).
 One algorithm, three bit-identical ports (Python, Java, JavaScript), an optional
-WebGPU accelerator, and a web app published on GitHub Pages. Public repository,
-AGPL v3. Code, docs and skills are in English.
+WebGPU accelerator, and a web app published on GitHub Pages. Code, docs and skills are in
+English.
+
+> **PUBLIC REPOSITORY (AGPL-3.0).** Everything committed here is public: code, docs, this
+> card, the skill and every commit message — and a push to `main` republishes the app. It
+> states only what anyone can check from it alone (the algorithm, its defaults and their
+> rules, speed, parity). Never write into it: comparisons with other methods, scores,
+> sweeps or competition notes (they belong to the private evaluation), unpublished paper
+> drafts, keys or tokens, personal data of anyone. When in doubt, leave it out and ask Jean-Luc.
 
 **Read next:** `.claude/skills/zigzag/SKILL.md` — the arithmetic rules that keep the
 ports identical, the pitfalls already paid for, and the release procedure.
@@ -35,9 +42,7 @@ ports identical, the pitfalls already paid for, and the release procedure.
 - **Every release that touches the app bumps `CACHE` in `sw.js`**, or installed copies
   keep the old version.
 - **No incubator or preview code** in any port (the Java port stays on Java 11+, no flag).
-- **The repository is public.** It states what anyone can check from it alone (algorithm,
-  defaults and their rules, speed, parity). Comparisons with other methods, scores, sweeps
-  and competition notes live in the private `Bloechle/UniFR` (`research/zigzag/`); no personal data.
+- **The repository is public**: the banner at the top of this card applies to every commit.
 
 ## Gates
 
