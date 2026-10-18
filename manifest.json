@@ -23,11 +23,49 @@
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "any"
+        },
+        {
+            "src": "assets/icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
         }
     ],
     "categories": [
         "productivity",
         "utilities",
         "photo"
+    ],
+    "share_target": {
+        "action": "./?share",
+        "method": "POST",
+        "enctype": "multipart/form-data",
+        "params": {
+            "files": [
+                {
+                    "name": "image",
+                    "accept": [
+                        "image/*"
+                    ]
+                }
+            ]
+        }
+    },
+    "file_handlers": [
+        {
+            "action": "./",
+            "accept": {
+                "image/jpeg": [
+                    ".jpg",
+                    ".jpeg"
+                ],
+                "image/png": [
+                    ".png"
+                ],
+                "image/webp": [
+                    ".webp"
+                ]
+            }
+        }
     ]
 }

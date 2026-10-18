@@ -2,6 +2,17 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.3.7 — 2026-10-18
+
+**Same output as 1.3.6, bit for bit.** Web app only, after a full audit.
+
+- Installed, the app receives images: shared from another app on Android (`share_target`), or opened with it on the desktop (`file_handlers`). Android shows a maskable icon instead of the round one in a white disc.
+- Updates: a new version is installed past the HTTP cache (it could be filled with the previous version's files) and applies itself on the landing page, or at the next New — never while an image is open.
+- Feedback: opening a large photo says so and holds the buttons; the spinner shows only when a run lasts past 200 ms, so moving a slider no longer blurs the preview; the info badge is shorter (one line less on a phone).
+- Accessibility: the sliders announce their value (they announced their index), B&W and Gray are toggle buttons, the settings sheet is a region the Tune button reports open or closed, the page has landmarks, and secondary text meets 4.5:1 contrast.
+- With a mouse, the landing page offers Choose an image as its main action (Take a photo only opened the file picker). `+` and `-` zoom. Dragging text over the page no longer shows the drop overlay.
+- `tools/app_check.py`: an image shared to the installed app opens and its parked copy is released; sliders and mode buttons expose their state.
+
 ## 1.3.6 — 2026-10-18
 
 **Same output as 1.3.5, bit for bit.** Web app only.

@@ -12,7 +12,8 @@ software WebGPU adapter (SwiftShader), and checks:
   2. The app itself: example photo processed, automatic window, mode switch,
      Specks switch, Reset, settings migrated from an older version, no errors;
      then the same photo in a browser without WebGPU (CPU port in its worker).
-  3. Offline: once installed, the page reloads with the server stopped.
+  3. Installed: an image shared to the app (share_target) opens; then the page
+     reloads with the server stopped (offline).
 
     pip install playwright && python -m playwright install chromium
     python tools/app_check.py
@@ -93,6 +94,14 @@ SAME_AS_PORT = """async () => {
 }"""
 
 
+SHARE_FORM = """() => {
+    const form = Object.assign(document.createElement('form'), {
+        id: 'shareForm', method: 'post', enctype: 'multipart/form-data', action: './?share' });
+    form.append(Object.assign(document.createElement('input'), { type: 'file', name: 'image' }));
+    document.body.append(form);
+}"""
+
+
 async def badge_with(page, text):
     await page.wait_for_function(
         f"document.getElementById('infoBadge').textContent.includes({text!r})", timeout=120000)
@@ -135,6 +144,9 @@ async def main():
         c.ok(await page.inner_text("#valSize") == "Auto", "old default Window migrated to Auto")
         c.ok(await page.get_attribute(".mode-btn.active", "data-mode") == "binary"
              and not await page.query_selector("[data-mode=color]"), "saved Color mode opens in B&W")
+        c.ok(await page.get_attribute("#slWeight", "aria-valuetext") == "90 %"
+             and await page.get_attribute("[data-mode=binary]", "aria-pressed") == "true",
+             "sliders and mode buttons tell assistive tech their state")
 
         await page.click("#btnExample")
         badge = await badge_with(page, " ms")
@@ -182,10 +194,19 @@ async def main():
         c.ok(not cpu_errors, "no page errors" + (f": {cpu_errors}" if cpu_errors else ""))
         await plain.close()
 
-        print("Offline:")
+        print("Installed:")
         await page.wait_for_function("navigator.serviceWorker.controller !== null || "
                                      "(location.reload(), false)", timeout=30000, polling=1000)
         await page.wait_for_timeout(1500)
+        # what Android's share sheet does: a multipart POST to the share_target action
+        await page.evaluate(SHARE_FORM)
+        await page.set_input_files("#shareForm input", os.path.join(ROOT, "examples", "02_timetable.jpg"))
+        await page.evaluate("document.getElementById('shareForm').submit()")
+        badge = await badge_with(page, " ms")
+        c.ok(badge.startswith("1318×1898") and page.url.endswith("/"), f"shared image opens: {badge}")
+        c.ok(await page.evaluate(
+            "caches.open('zigzag-shared').then(c => c.keys()).then(k => k.length)") == 0,
+            "the parked image is released")
         httpd.shutdown()                  # a real outage: the server is gone
         httpd.server_close()
         await page.goto(url + "?source=pwa")

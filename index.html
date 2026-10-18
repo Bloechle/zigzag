@@ -15,7 +15,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="assets/icon-192.png">
+    <link rel="apple-touch-icon" href="assets/icon-maskable-512.png">
     <title>ZigZag — Document Image Binarizer</title>
     <link rel="icon" href="assets/icon-192.png">
     <style>
@@ -28,7 +28,7 @@
             --border:      #2a2a2e;
             --text:        #e4e4e7;
             --dim:         #a1a1aa;
-            --muted:       #52525b;
+            --muted:       #84848e;   /* 4.5:1 on the sheet too (WCAG AA) */
             --accent:      #005393;   /* corporate blue — fills */
             --accent-soft: #4da3dd;   /* readable tint of it on dark — text & glows */
             --ok:          #34d399;
@@ -81,6 +81,12 @@
         .btn-primary { background: var(--accent); color: #fff; }
         .btn-secondary { background: var(--bg-elevated); border: 1px solid var(--border); }
         .btn-primary:active, .btn-secondary:active { transform: scale(.97); }
+        /* mouse and trackpad: no camera to open, so choosing a file is the main action */
+        @media (hover: hover) and (pointer: fine) {
+            #btnCamera { display: none; }
+            #btnGallery { background: var(--accent); border-color: var(--accent); color: #fff; }
+        }
+        body.busy, body.busy * { cursor: progress !important; }
 
         .landing-hint { color: var(--muted); font-size: .78rem; }
         .link-btn { color: var(--accent-soft); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
@@ -136,7 +142,7 @@
 
         #infoBadge {
             position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
-            max-width: calc(100% - 20px); text-align: center; line-height: 1.4;
+            max-width: calc(100% - 20px); text-align: center; line-height: 1.4; text-wrap: balance;
             font-size: .7rem; color: var(--dim); padding: 5px 12px; border-radius: 14px;
             background: rgba(28, 28, 31, .75); border: 1px solid var(--border);
             backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -252,7 +258,7 @@
 <body>
 
 <!-- ═══ LANDING ═══ -->
-<div id="landing">
+<main id="landing">
     <div class="landing-content">
         <img src="assets/zigzag-logo.png" alt="ZigZag">
         <h1>ZigZag</h1>
@@ -278,10 +284,10 @@
             <span>Bloechle, Hennebert &amp; Gisler</span>
         </div>
     </div>
-</div>
+</main>
 
 <!-- ═══ APP ═══ -->
-<div id="app" class="hidden">
+<main id="app" class="hidden">
     <div id="viewport">
         <div id="compareWrap">
             <canvas id="canvasResult" role="img" aria-label="Cleaned-up document"></canvas>
@@ -299,9 +305,9 @@
     </div>
 
     <div class="bottom-bar">
-        <div class="mode-row" id="modeRow" role="radiogroup" aria-label="Output mode">
-            <button class="mode-btn active" data-mode="binary" role="radio" aria-checked="true">B&amp;W</button>
-            <button class="mode-btn" data-mode="gray" role="radio" aria-checked="false">Gray</button>
+        <div class="mode-row" id="modeRow" role="group" aria-label="Output">
+            <button class="mode-btn active" data-mode="binary" aria-pressed="true" title="Black and white (1)">B&amp;W</button>
+            <button class="mode-btn" data-mode="gray" aria-pressed="false" title="Grayscale (2)">Gray</button>
         </div>
         <div class="action-row">
             <button id="btnNew" class="action-btn" title="New image (N)">
@@ -312,7 +318,7 @@
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
                 <span>Rotate</span>
             </button>
-            <button id="btnTune" class="action-btn" title="Settings (T)">
+            <button id="btnTune" class="action-btn" title="Settings (T)" aria-expanded="false" aria-controls="sheet">
                 <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
                 <span>Tune</span>
             </button>
@@ -328,7 +334,7 @@
         </div>
     </div>
 
-    <div id="sheet" class="hidden hidden-anim">
+    <div id="sheet" class="hidden hidden-anim" role="region" aria-label="Settings">
         <div class="sheet-backdrop" id="sheetBackdrop"></div>
         <div class="sheet-panel" id="sheetPanel">
             <div class="sheet-drag-bar"></div>
@@ -376,7 +382,7 @@
             </div>
         </div>
     </div>
-</div>
+</main>
 
 <!-- ═══ DROP OVERLAY ═══ -->
 <div id="dropOverlay" class="hidden">
@@ -392,11 +398,6 @@
 <script type="module">
     import { ZigZag } from './js/zigzag.js';
     import { ZigZagGPU } from './js/zigzag-gpu.js';
-
-    // PWA: offline cache + installability (no-op on file:// or unsupported)
-    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-        addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
-    }
 
     const $ = id => document.getElementById(id);
     const el = {};
@@ -446,6 +447,7 @@
     // tighter budget than the GPU (whose ceiling is a device limit).
     const CPU_MAX_PIXELS = 4_000_000;
     const GPU_MAX_PIXELS = 12_000_000;
+    const SPINNER_DELAY = 200;       // ms: quicker runs swap the result without a flash
 
     let gpu = null;                  // WebGPU accelerator, null => CPU (set once gpuReady settles)
     let worker = null;               // CPU port off the main thread, null => inline
@@ -625,10 +627,29 @@
         await setSource(image);
     }
 
+    /** Open an image with feedback: decoding a large photo takes a moment, so the
+     *  landing page says so and its buttons wait. getBlob may fetch. */
+    async function openImage(getBlob, name) {
+        document.body.classList.add('busy');
+        el.gpuStatus.textContent = 'Opening…';
+        el.gpuStatus.classList.remove('on');
+        for (const b of [el.btnCamera, el.btnGallery, el.btnExample]) b.disabled = true;
+        try {
+            await loadBlob(await getBlob(), name);
+            setGpuStatus();
+        } catch {
+            setGpuStatus();
+            notify(`Could not open “${name}”`);
+        } finally {
+            document.body.classList.remove('busy');
+            for (const b of [el.btnCamera, el.btnGallery, el.btnExample]) b.disabled = false;
+        }
+    }
+
     function loadFile(file) {
         if (!file) return;
         if (!file.type.startsWith('image/')) return notify('Not an image file');
-        loadBlob(file, file.name).catch(() => notify(`Could not read “${file.name}”`));
+        openImage(() => file, file.name);
     }
 
     /** Rotate the source 90° clockwise, keeping the current parameters
@@ -647,7 +668,7 @@
         await setSource(ctx.getImageData(0, 0, h, w));
     }
 
-    // ── processing (GPU first, worker, then inline CPU) ──
+    // ── processing ──
     /** Paint the result; false when the browser silently refused the canvas size. */
     function showResult(res) {
         const c = el.canvasResult;
@@ -681,10 +702,21 @@
     }
 
     /** One run on image; returns the image when it must be shrunk for the CPU.
-     *  A result for an image no longer shown (New, a new image) is dropped. */
+     *  The spinner shows only if the run lasts past SPINNER_DELAY. */
     async function runOnce(image) {
-        el.spinner.classList.remove('hidden');
-        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const spin = setTimeout(() => el.spinner.classList.remove('hidden'), SPINNER_DELAY);
+        try {
+            return await compute(image);
+        } finally {                                  // never left up behind a failed run
+            clearTimeout(spin);
+            el.spinner.classList.add('hidden');
+        }
+    }
+
+    /** GPU first, the worker next, inline CPU last; then paint the result.
+     *  A result for an image no longer shown (New, a new image) is dropped. */
+    async function compute(image) {
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));   // paint first
 
         const size = sliderValue('slSize');
         const opts = {
@@ -715,15 +747,12 @@
             if (!res) res = await cpuProcess(opts);
             if (!res) res = ZigZag.process(image, opts);   // worker died mid-flight
         } catch (err) {
-            // never leave the spinner up behind a failed run
             pending = false;
-            el.spinner.classList.add('hidden');
             console.error(err);
             notify('Processing failed — try a smaller image');
             return null;
         }
         const ms = performance.now() - t0;
-        el.spinner.classList.add('hidden');
         if (image !== srcImage) return null;
 
         if (!showResult(res)) {
@@ -739,12 +768,12 @@
 
         const i = res.info;
         const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
-        const up = res.width !== image.width ? ` → ${res.width}×${res.height}` : '';
-        const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
-        const wt = (i.weight !== 90 ? ` · w ${i.weight}` : '') + (i.despeckle === 0 ? ' · specks kept' : '');
-        clearTimeout(badgeTimer);
+        const up = res.width !== image.width ? ' · 2×' : '';
         const sz = i.autoSize ? `size ${i.size} (auto)` : `size ${i.size}`;
-        lastBadge = `${image.width}×${image.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} · ${ms.toFixed(0)} ms`;
+        const wt = (i.weight !== 90 ? ` · w ${i.weight}` : '') + (i.despeckle === 0 ? ' · specks kept' : '');
+        const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
+        clearTimeout(badgeTimer);
+        lastBadge = `${image.width}×${image.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} ${ms.toFixed(0)} ms`;
         el.infoBadge.textContent = lastBadge;
 
         el.btnSave.disabled = false;
@@ -900,17 +929,11 @@
         input.addEventListener('change', () => { loadFile(input.files[0]); input.value = ''; });
     }
 
-    el.btnExample.addEventListener('click', async () => {
-        el.btnExample.disabled = true;
-        try {
-            const r = await fetch('examples/01_letter.jpg');
-            if (!r.ok) throw new Error(r.status);
-            await loadBlob(await r.blob(), 'example.jpg');
-        } catch {
-            notify('Example image unavailable');
-        }
-        el.btnExample.disabled = false;
-    });
+    el.btnExample.addEventListener('click', () => openImage(async () => {
+        const r = await fetch('examples/01_letter.jpg');
+        if (!r.ok) throw new Error(r.status);
+        return r.blob();
+    }, 'example.jpg'));
 
     // ── modes & parameters ──
     function setMode(m, rerun = true) {
@@ -918,7 +941,7 @@
         for (const b of el.modeRow.querySelectorAll('.mode-btn')) {
             const on = b.dataset.mode === m;
             b.classList.toggle('active', on);
-            b.setAttribute('aria-checked', String(on));
+            b.setAttribute('aria-pressed', String(on));
         }
         if (rerun) { savePrefs(); run(); }
     }
@@ -930,8 +953,10 @@
 
     function showSlider(s, v) {
         const n = sliderValue(s);
-        if (s === 'slSize' && n === AUTO) { el[v].textContent = 'Auto'; return; }
-        el[v].textContent = (s === 'slThr' && n > 0 ? '+' + n : String(n)) + UNITS[s];
+        const text = s === 'slSize' && n === AUTO ? 'Auto'
+            : (s === 'slThr' && n > 0 ? '+' + n : String(n)) + UNITS[s];
+        el[v].textContent = text;
+        el[s].setAttribute('aria-valuetext', text);   // the slider holds an index
     }
 
     SLIDERS.forEach(([s, v]) => {
@@ -952,6 +977,7 @@
 
     function showSheet(on) {
         sheetOpen = on;
+        el.btnTune.setAttribute('aria-expanded', String(on));
         if (on) {
             el.sheet.classList.remove('hidden');
             liftBadge();
@@ -1024,6 +1050,7 @@
 
     // ── output ──
     el.btnNew.addEventListener('click', () => {
+        if (updateReady) return location.reload();   // a new version is waiting: take it now
         srcImage = null;                         // a run in flight drops its result
         origSize = null;
         pending = false;
@@ -1104,6 +1131,9 @@
         else if (k === 'c') el.btnShare.click();
         else if (k === 'n') el.btnNew.click();
         else if (k === '0') fitCanvases();
+        else if (k === '+' || k === '=' || k === '-') {
+            zoomAt(k === '-' ? 1 / 1.25 : 1.25, el.viewport.clientWidth / 2, el.viewport.clientHeight / 2);
+        }
         else if (k === 'tab') return;
         else if (e.key === ' ') { toggled = !toggled; applyCompare(); }
         else return;
@@ -1116,12 +1146,13 @@
         if (item) loadFile(item.getAsFile());
     });
     let dragDepth = 0;
+    const draggingFiles = e => e.dataTransfer?.types.includes('Files');   // not text or links
     document.addEventListener('dragenter', e => {
         e.preventDefault();
-        if (++dragDepth === 1) el.dropOverlay.classList.remove('hidden');
+        if (draggingFiles(e) && ++dragDepth === 1) el.dropOverlay.classList.remove('hidden');
     });
-    document.addEventListener('dragleave', () => {
-        if (--dragDepth === 0) el.dropOverlay.classList.add('hidden');
+    document.addEventListener('dragleave', e => {
+        if (draggingFiles(e) && --dragDepth === 0) el.dropOverlay.classList.add('hidden');
     });
     document.addEventListener('dragover', e => e.preventDefault());
     document.addEventListener('drop', e => {
@@ -1138,6 +1169,35 @@
         setSliderValue(s, DEFAULTS[s]);
     }
     loadPrefs();
+
+    // ── PWA: offline cache, updates, images handed over by the system ──
+    let updateReady = false;
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+        addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+        // a new version took over (sw.js claims open pages): apply it at once on an
+        // idle landing page, otherwise at the next New — never in the middle of work
+        let controlled = !!navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (!controlled) { controlled = true; return; }    // first install: same version
+            updateReady = true;
+            if (!srcImage && !document.body.classList.contains('busy')) location.reload();
+        });
+    }
+
+    // shared from another app (manifest share_target): sw.js parked the file
+    if (new URLSearchParams(location.search).has('shared')) {
+        history.replaceState(null, '', location.pathname);
+        caches.open('zigzag-shared').then(async cache => {
+            const r = await cache.match('shared');
+            await cache.delete('shared');
+            if (r) openImage(() => r.blob(), decodeURIComponent(r.headers.get('X-Name') || 'shared'));
+        }).catch(() => notify('Could not open the shared image'));
+    }
+
+    // opened with "Open with ZigZag" (manifest file_handlers, installed app on desktop)
+    window.launchQueue?.setConsumer(async ({ files }) => {
+        if (files?.length) loadFile(await files[0].getFile());
+    });
 </script>
 </body>
 </html>
