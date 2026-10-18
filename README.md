@@ -33,7 +33,7 @@ ZigZag is a two-pass local mean filter. **Pass A** classifies likely background 
 
 `weight` is the mean percentage (default 90). It rarely needs changing: 85–90 suits clean and degraded pages alike, and 100 is too strict.
 
-`despeckle` removes ink specks: after thresholding, 8-connected ink components smaller than an area are turned back into paper. On a dark, noisy photo, normalizing against a small background amplifies the sensor noise, and the global threshold cannot tell that grain from faint ink; this is where it shows. The area scales as the square of the window, `round(size² / 225)` pixels — 4 at size 30, 26 at 77 — which, at the resolution the window implies, sits below nearly every genuine mark. Set it to 0 to keep every speck, for music scores, dotted scripts or very fine punctuation.
+`despeckle` (off by default) removes ink specks: after thresholding, 8-connected ink components smaller than an area are turned back into paper. On a dark, noisy photo, normalizing against a small background amplifies the sensor noise, and the global threshold cannot tell that grain from faint ink; this is where it helps. Give an area in pixels, or `auto` for `round(size² / 225)` — 4 at size 30, 26 at 77. It is off by default because the area follows the image, not the print: on small text photographed at a high resolution it also removes the dots of i and j and fine punctuation.
 
 `threshold-offset` (default 0) manually shifts the automatic Otsu threshold up or down — automatic detection is preserved, the offset just nudges the cut. Like the despeckle, it is effective in all three modes.
 
@@ -42,7 +42,7 @@ Output modes: `binary` (thresholded, 2× upsampled by default for detail preserv
 The three ports share the same float64 arithmetic and produce **bit-identical outputs** across languages, using separable running box sums in O(n). The box sums run on integers (gray levels and flags in, int32 sums out), exact whatever the order of the additions. This is not a claim but a test: [`tools/parity.py`](tools/parity.py) runs all three over a matrix of images (colour, grayscale, RGBA, 16-bit, an A4-sized page, a page sown with specks of every size, and degenerate 1-pixel-wide cases), modes and parameters — automatic and fixed sizes, despeckle automatic, explicit and off, 2× and 1× binary output — and compares every pixel. It also checks that the automatic size rule returns the same integer in every port over some ten thousand image dimensions, chosen around the clamps and where the diagonal falls closest to a rounding boundary. The JS port is fed pixels already decoded by OpenCV, since in the browser the canvas does the decoding: for JS the harness proves the computation, not the decoder.
 
 ```sh
-python tools/parity.py     # 468 comparisons — any divergence is a bug
+python tools/parity.py     # 546 comparisons — any divergence is a bug
 ```
 
 It runs in CI on every change to a port ([`.github/workflows/parity.yml`](.github/workflows/parity.yml)). It has already earned its keep: it caught the Java port decoding grayscale images through a linear-gray colour space, which shifted every sample (1 → 13, 128 → 186) against the Python and JS ports.
@@ -53,13 +53,13 @@ One file; requires NumPy and OpenCV:
 
 ```sh
 pip install numpy opencv-python
-python ports/zigzag.py photo.jpg                    # binary, automatic size and despeckle
+python ports/zigzag.py photo.jpg                    # binary, automatic size
 python ports/zigzag.py -m color photo.jpg           # color foreground
-python ports/zigzag.py -d 0 score.png               # keep every speck (music, dotted scripts)
+python ports/zigzag.py -d auto noisy.jpg            # remove specks (dark, noisy photos)
 python ports/zigzag.py -t *.jpg -o cleaned/         # batch into a directory, with timings
 ```
 
-The result is written next to each input as `<name>_ZZ.png`. Options: `-m` mode; `-s` window size or `auto`; `-w` weight; `-d` despeckle area or `auto` (0 keeps every speck); `-T` threshold offset; `-o` output file — or directory when batching; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, thresholds, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×; `--version`. The exit status is 0 on success, 1 when an input could not be read or written, 2 for a bad command line. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
+The result is written next to each input as `<name>_ZZ.png`. Options: `-m` mode; `-s` window size or `auto`; `-w` weight; `-d` despeckle area or `auto` (default 0, every speck kept); `-T` threshold offset; `-o` output file — or directory when batching; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, thresholds, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×; `--version`. The exit status is 0 on success, 1 when an input could not be read or written, 2 for a bad command line. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
 
 ```python
 from zigzag import process
@@ -79,9 +79,9 @@ python ports/zigzag.py -b cpu photo.jpg             # force a backend (auto|gpu|
 One file, no dependencies, multi-threaded across all cores, and the fastest port. It needs **Java 11+** and runs directly — no compilation step, no flag:
 
 ```sh
-java ports/ZigZag.java photo.jpg                 # binary, automatic size and despeckle
+java ports/ZigZag.java photo.jpg                 # binary, automatic size
 java ports/ZigZag.java photo.jpg --mode=color    # color foreground
-java ports/ZigZag.java score.png --despeckle=0 --output=clean.png
+java ports/ZigZag.java noisy.jpg --despeckle=auto --output=clean.png
 java ports/ZigZag.java *.jpg --output=cleaned/ --time
 ```
 
@@ -91,7 +91,7 @@ Options: `--mode=binary|gray|color` · `--size=N|auto` (up to 2048) · `--weight
 
 ```java
 ZigZag.Options opts = new ZigZag.Options();   // mode, size, weight, upsample, thresholdOffset, despeckle
-opts.mode = "binary";                         // size and despeckle default to ZigZag.AUTO
+opts.mode = "binary";                         // size defaults to ZigZag.AUTO, despeckle to 0 (AUTO on request)
 ZigZag.Result res = ZigZag.process(image, opts);
 // res.image (BufferedImage), res.info (size used and whether it was automatic,
 // despeckle area, auto Otsu, applied threshold)
@@ -110,7 +110,7 @@ ZigZag.Result res = ZigZag.process(image, opts);
 </script>
 ```
 
-Like the Python and Java ports, `size` and `despeckle` default to their automatic rules (`null` or `'auto'`; `autoSize(w, h)` and `autoDespeckle(size)` are exported), and `thresholdOffset` (default 0) shifts the auto Otsu threshold; `info` reports both the auto and the applied values. Invalid options throw rather than produce a degenerate image.
+Like the Python and Java ports, `size` defaults to its automatic rule (`null` or `'auto'`) and `despeckle` to 0, with `'auto'` on request (`autoSize(w, h)` and `autoDespeckle(size)` are exported), and `thresholdOffset` (default 0) shifts the auto Otsu threshold; `info` reports both the auto and the applied values. Invalid options throw rather than produce a degenerate image.
 
 [`zigzag-gpu.js`](js/zigzag-gpu.js) is an optional WebGPU accelerator running the same pipeline as compute shaders. The foreground is cached on the GPU, so switching the output mode or the 2× upsample is near-instant; the despeckle, a connected-component pass that is sequential by nature, runs on the CPU with the CPU port's own function, and its result is cached per threshold. WebGPU uses float32 (no f64), so a handful of boundary pixels may differ from the CPU output by ±1 gray level — visually identical; [`tools/app_check.py`](tools/app_check.py) measures it on every change:
 
@@ -128,7 +128,7 @@ if (ZigZagGPU.isSupported()) {
 
 It takes the same options with the same defaults, resolved by the same code as the CPU port. Its box sums are float32, which stays exact up to a 255 px window; larger windows are refused (the automatic size stops at 250). The 2× buffers cost 16 bytes per source pixel, and WebGPU's *default* storage-buffer binding limit is 128 MiB — only ~8.4 MP. `init()` therefore requests the adapter's real limits and exposes the resulting ceiling as `gpu.maxPixels`; downscale to it before uploading. Every submit runs inside a validation error scope, so a rejected dispatch throws instead of silently returning an unwritten buffer, which is what makes the CPU fallback reliable. The Otsu threshold and the despeckle are imported from `zigzag.js` rather than reimplemented, so the two backends cannot diverge on them.
 
-[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W and Gray (the color output is in the ports and their command lines), rotate, tune **Window** (`size`, automatic by default, or a fixed window in px), **Background** (`weight`), **Ink** (`threshold-offset`) and **Specks** (the despeckle, on by default), each with a plain-language explanation behind the **?** in the settings sheet, pinch-zoom and pan the preview — full width on a phone, the whole page on a landscape screen (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `+` `-` zoom, `space` toggle original, `←` `→` move the comparison slider, `Esc` close the settings.
+[`index.html`](index.html) turns the repository into a mobile-first web app: shoot with the camera, pick, drop, or paste a document photo, switch between B&W and Gray (the color output is in the ports and their command lines), rotate, tune **Window** (`size`, automatic by default, or a fixed window in px), **Background** (`weight`), **Ink** (`threshold-offset`) and **Specks** (the despeckle, off by default), each with a plain-language explanation behind the **?** in the settings sheet, pinch-zoom and pan the preview — full width on a phone, the whole page on a landscape screen (double-tap to reset), swipe the comparison slider against the original (tap to toggle), and save, share or copy the result. Settings and mode are remembered between visits, and the keyboard drives everything on desktop: `1` `2` modes, `R` rotate, `T` tune, `S` save, `C` share/copy, `N` new, `0` reset view, `+` `-` zoom, `space` toggle original, `←` `→` move the comparison slider, `Esc` close the settings.
 
 Everything runs on-device: on the GPU when WebGPU is available (Chrome, Edge, Safari 26+, Firefox 141+ on Windows and macOS), otherwise on the CPU port in a Web Worker, split across the device's cores for large images, so the interface stays responsive — the status line shows which backend ran. When a browser refuses to allocate the 2× output canvas, the app drops to 1× rather than showing a blank result. The page is an installable PWA: add it to your home screen and it works offline (`manifest.json` + `sw.js`, stale-while-revalidate; the example photo is fetched on demand, so **try an example** needs one online visit first). Installed, it receives images: **Share** a photo to ZigZag from the gallery on Android, or **Open with** ZigZag on the desktop. A new version installs in the background and takes over on the landing page or at the next **New**, never in the middle of an image. It is published with GitHub Pages at **[bloechle.github.io/zigzag](https://bloechle.github.io/zigzag/)**. To run it locally, serve the folder (ES modules don't load from `file://`):
 
@@ -151,7 +151,7 @@ python -m http.server   # then open http://localhost:8000
 
 ## Versions
 
-The three ports carry the same version number (`zigzag.__version__`, `ZigZag.VERSION`, the `VERSION` export of `zigzag.js`, and `--version` on both command lines). A minor version may change the default output; every such change is listed in [`CHANGELOG.md`](CHANGELOG.md) together with the options that reproduce the previous one. Results computed with 1.0 are reproduced exactly with a fixed size of 30 and the despeckle off (`-s 30 -d 0`, `--size=30 --despeckle=0`, `{ size: 30, despeckle: 0 }`).
+The three ports carry the same version number (`zigzag.__version__`, `ZigZag.VERSION`, the `VERSION` export of `zigzag.js`, and `--version` on both command lines). A minor version may change the default output; every such change is listed in [`CHANGELOG.md`](CHANGELOG.md) together with the options that reproduce the previous one. Results computed with 1.0 are reproduced exactly with a fixed size of 30 (`-s 30`, `--size=30`, `{ size: 30 }`); results of 1.2–1.3 with the despeckle on (`-d auto`, `--despeckle=auto`, `{ despeckle: 'auto' }`).
 
 ## Development
 

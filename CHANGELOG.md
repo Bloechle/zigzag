@@ -2,6 +2,15 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.4.0 — 2026-10-18
+
+**Default output changed: the despeckle is off.** Reproduce 1.2–1.3.8 with `-d auto` (Python), `--despeckle=auto` (Java), `{ despeckle: 'auto' }` (JavaScript, WebGPU), or Specks On in the app.
+
+- The automatic area, `round(size² / 225)`, follows the image's size, not the print's: on small text photographed at a high resolution it removed the dots of i and j and fine punctuation (25 px at the example letter's 1968×2730, where i-dots are about that size). Losing text is worse than keeping grain, so it is now opt-in, for dark, noisy photos.
+- The option is unchanged: an area in pixels, or `auto` for the rule above. In JavaScript, `null` now means the default (0); ask for the rule with `'auto'`.
+- App: Specks starts Off; a saved On from an earlier version is reset once (`PREFS_VERSION` 3); the badge says when specks are removed, and the explanation behind `?` says what it costs.
+- `examples/*_ZZ.png` regenerated. `tools/parity.py` adds the new default (546 comparisons); `tools/app_check.py` checks the switch, Reset and the migration.
+
 ## 1.3.8 — 2026-10-18
 
 **Same output as 1.3.7, bit for bit.** Web app only: the toolbar and the settings.

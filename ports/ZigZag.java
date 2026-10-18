@@ -9,8 +9,8 @@
  * Two-pass local mean filtering: Pass A classifies likely background pixels
  * against the weighted local mean; Pass B normalizes each pixel against the
  * local mean of background-only pixels, equalizing illumination before a
- * single global Otsu threshold; ink specks below an area that scales with the
- * window are then removed (despeckle).
+ * single global Otsu threshold. On request, ink specks below an area that
+ * scales with the window are then removed (despeckle, off by default).
  *
  * Single file, no dependencies, separable rolling sums (O(n)) on integers,
  * parallel across rows. Runs directly with Java (no compilation step):
@@ -30,7 +30,7 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.3.8";
+    public static final String VERSION = "1.4.0";
     public static final int OTSU_CAP = 250;
     /** Options.size / Options.despeckle value that selects the automatic rule. */
     public static final int AUTO = -1;
@@ -46,7 +46,7 @@ public class ZigZag {
         public int weight = 90;
         public boolean upsample = true;
         public int thresholdOffset = 0;    // manual shift of the auto Otsu threshold
-        public int despeckle = AUTO;       // smallest ink component kept (px), 0 = keep all
+        public int despeckle = 0;          // smallest ink component kept (px), 0 = keep all, or AUTO
     }
 
     /** Parameters used, auto Otsu and applied threshold. */

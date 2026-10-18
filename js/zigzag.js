@@ -9,8 +9,8 @@
  * Two-pass local mean filtering: Pass A classifies likely background pixels
  * against the weighted local mean; Pass B normalizes each pixel against the
  * local mean of background-only pixels, equalizing illumination before a
- * single global Otsu threshold; ink specks below an area that scales with the
- * window are then removed (despeckle).
+ * single global Otsu threshold. On request, ink specks below an area that
+ * scales with the window are then removed (despeckle, off by default).
  *
  * Dependency-free ES module, separable rolling sums (O(n)), float64.
  *
@@ -21,7 +21,7 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.3.8';
+const VERSION = '1.4.0';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
@@ -31,9 +31,9 @@ const OTSU_CAP = 250;
  *  (the automatic size stops at 250). */
 const MAX_SIZE = 2048;
 const MODES = ['binary', 'gray', 'color'];
-/** size and despeckle: null (or 'auto') = the automatic rules below. */
+/** size: null (or 'auto') = the automatic rule below; despeckle: 0 (off), or 'auto'. */
 const DEFAULTS = Object.freeze({
-    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: null,
+    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: 0,
 });
 
 /**
@@ -61,7 +61,7 @@ function resolveOptions(opts, w, h) {
     if (!(w > 0 && h > 0)) throw new RangeError(`empty image: ${w}x${h}`);
     const o = { ...DEFAULTS };
     for (const k of Object.keys(DEFAULTS)) if (opts[k] != null) o[k] = opts[k];
-    for (const k of ['size', 'despeckle']) if (o[k] === 'auto') o[k] = null;
+    if (o.size === 'auto') o.size = null;
     if (!MODES.includes(o.mode)) {
         throw new Error(`invalid mode: ${o.mode} (expected binary, gray or color)`);
     }
@@ -74,7 +74,7 @@ function resolveOptions(opts, w, h) {
     if (!Number.isInteger(o.thresholdOffset)) {
         throw new RangeError(`invalid threshold offset: ${o.thresholdOffset} (expected an integer)`);
     }
-    if (o.despeckle == null) o.despeckle = autoDespeckle(o.size);
+    if (o.despeckle === 'auto') o.despeckle = autoDespeckle(o.size);
     if (!Number.isInteger(o.despeckle) || o.despeckle < 0) {
         throw new RangeError(`invalid despeckle: ${o.despeckle} (expected an integer >= 0)`);
     }
@@ -308,9 +308,9 @@ class ZigZag {
     /**
      * imageData: { data: RGBA bytes, width, height }
      * opts: { mode: 'binary'|'gray'|'color', size, weight, upsample,
-     *         thresholdOffset, despeckle }  — size and despeckle null/'auto'
-     *         (default) = automatic; offset shifts the auto Otsu threshold;
-     *         despeckle 0 keeps every ink speck
+     *         thresholdOffset, despeckle }  — size null/'auto' (default) =
+     *         automatic; offset shifts the auto Otsu threshold; despeckle 0
+     *         (default) keeps every ink speck, 'auto' uses autoDespeckle
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {

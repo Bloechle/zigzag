@@ -40,10 +40,10 @@ JAVA = os.path.join(ROOT, "ports", "ZigZag.java")
 JS = os.path.join(ROOT, "js", "zigzag.js")
 
 MODES = ["binary", "gray", "color"]
-# (size, weight, threshold offset, 2x upsample, despeckle) — "auto" is the
-# default rule; (30, 90, 0, True, 0) is the 1.0 default output
-PARAMS = [("auto", 90, 0, True, "auto"), (30, 90, 0, True, 0), (45, 60, -15, True, "auto"),
-          (12, 100, 25, True, "auto"), (100, 75, 0, True, 50), (30, 90, 0, False, "auto")]
+# (size, weight, threshold offset, 2x upsample, despeckle) — ("auto", ..., 0) is
+# the default output since 1.4, (30, 90, 0, True, 0) the 1.0 one
+PARAMS = [("auto", 90, 0, True, 0), (30, 90, 0, True, 0), ("auto", 90, 0, True, "auto"),
+          (45, 60, -15, True, "auto"), (12, 100, 25, True, "auto"), (100, 75, 0, True, 50), (30, 90, 0, False, "auto")]
 
 
 # ── test corpus ──────────────────────────────────────────────────────────────

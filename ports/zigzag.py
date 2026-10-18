@@ -10,8 +10,8 @@ Non-Uniformly Illuminated Document Image Binarization"
 Two-pass local mean filtering: Pass A classifies likely background pixels
 against the weighted local mean; Pass B normalizes each pixel against the
 local mean of background-only pixels, equalizing illumination before a
-single global Otsu threshold; ink specks below an area that scales with the
-window are then removed (despeckle).
+single global Otsu threshold. On request, ink specks below an area that
+scales with the window are then removed (despeckle, off by default).
 
 Backends (auto-detected): CuPy (NVIDIA GPU, optional `pip install cupy-cuda12x`)
 or OpenCV (CPU). Box sums are exact integers (int32 on OpenCV, a float64
@@ -21,10 +21,10 @@ the Java/JS ports.
 Copyright (c) Jean-Luc Bloechle - AGPL v3
 
 CLI:
-  python zigzag.py photo.jpg                     # binary, automatic size and despeckle
+  python zigzag.py photo.jpg                     # binary, automatic size
   python zigzag.py -m color photo.jpg            # color foreground
-  python zigzag.py -d 0 score.png                # keep every speck (music, dotted scripts)
-  python zigzag.py -s 30 -d 0 photo.jpg          # the 1.0 defaults
+  python zigzag.py -d auto noisy.jpg             # remove specks (dark, noisy photos)
+  python zigzag.py -s 30 photo.jpg               # the 1.0 defaults
 """
 
 import argparse
@@ -45,7 +45,7 @@ except Exception:
     cp = None
     HAS_GPU = False
 
-__version__ = '1.3.8'
+__version__ = '1.4.0'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
 MAX_SIZE = 2048     # keeps 255 * (size + 1)² inside the int32 box sums of the other ports
@@ -179,13 +179,13 @@ def despeckle_mask(ink, min_area):
 # ── core pipeline (Algorithm 1 of the paper) ─────────────────────────────────
 
 def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=None,
-            threshold_offset=0, despeckle=None):
+            threshold_offset=0, despeckle=0):
     """
     rgb: HxWx3 uint8 (RGB). Returns (output_uint8, info_dict).
     size: window in px, or None / 'auto' (default) for auto_size(width, height)
     threshold_offset: manual shift of the auto Otsu threshold (0 = auto)
-    despeckle: smallest ink component kept, in source pixels; None / 'auto'
-      (default) for auto_despeckle(size), 0 to keep everything
+    despeckle: smallest ink component kept, in source pixels; 0 (default) keeps
+      everything, None / 'auto' for auto_despeckle(size)
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
@@ -322,9 +322,9 @@ def main():
                         help="mean weight in percent, 85-90 suits most pages (default: 90)")
     parser.add_argument("-T", "--threshold-offset", type=int, default=0,
                         help="manual shift of the auto Otsu threshold (default: 0 = auto)")
-    parser.add_argument("-d", "--despeckle", type=_int_arg(0, auto=True), default=None,
-                        help="remove ink specks smaller than N source pixels, 0 to keep "
-                             "them (default: auto, from the window size)")
+    parser.add_argument("-d", "--despeckle", type=_int_arg(0, auto=True), default=0,
+                        help="remove ink specks smaller than N source pixels, or auto "
+                             "(from the window size); default: 0, keep them all")
     parser.add_argument("-b", "--backend", choices=["auto", "gpu", "cpu"],
                         default="auto", help="processing backend (default: auto)")
     parser.add_argument("-o", "--output",

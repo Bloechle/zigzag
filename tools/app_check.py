@@ -44,7 +44,7 @@ GPU_VS_CPU = """async () => {
     await gpu.init();
     await gpu.uploadImage(img);
     const rows = [];
-    for (const mode of ['binary', 'gray', 'color']) for (const despeckle of [null, 0]) {
+    for (const mode of ['binary', 'gray', 'color']) for (const despeckle of ['auto', 0]) {
         const a = ZigZag.process(img, { mode, despeckle });
         const b = await gpu.process({ mode, despeckle });
         let diff = 0, dmax = 0;
@@ -123,7 +123,7 @@ async def main():
         for r in rows or []:
             tol = 0 if r["mode"] == "binary" else GRAY_TOLERANCE
             c.ok(r["shape"] and r["info"] and r["frac"] <= tol and r["dmax"] <= 1,
-                 f"{r['mode']:6} despeckle {'auto' if r['despeckle'] is None else 0}: "
+                 f"{r['mode']:6} despeckle {r['despeckle']}: "
                  f"{r['frac']:.2e} of samples differ, max delta {r['dmax']}")
         await page.close()
 
@@ -135,15 +135,17 @@ async def main():
         page.on("console", lambda m: m.type == "error" and errors.append(m.text))
         await page.goto(url + "index.html")
         # settings saved by 1.1 (Window still on the old 30 px default) move to Auto;
-        # a Color mode saved before 1.3.6 (the app no longer offers it) opens in B&W
+        # a Color mode saved before 1.3.6 (the app no longer offers it) opens in B&W;
+        # Specks saved On (the default before 1.4) starts Off
         await page.evaluate("localStorage.setItem('zigzag.prefs', JSON.stringify("
-                            "{mode: 'color', size: 30, weight: 90, thr: 0}))")
+                            "{mode: 'color', size: 30, weight: 90, thr: 0, specks: true}))")
         await page.reload()
         await page.wait_for_function("document.getElementById('gpuStatus').textContent !== ''")
         c.ok("WebGPU" in await page.inner_text("#gpuStatus"), "GPU backend detected")
         c.ok(await page.inner_text("#valSize") == "Auto", "old default Window migrated to Auto")
         c.ok(await page.get_attribute(".mode-btn.active", "data-mode") == "binary"
              and not await page.query_selector("[data-mode=color]"), "saved Color mode opens in B&W")
+        c.ok(not await page.is_checked("#swSpecks"), "Specks saved On before 1.4 starts Off")
         c.ok(await page.get_attribute("#slWeight", "aria-valuetext") == "90 %"
              and await page.get_attribute("[data-mode=binary]", "aria-pressed") == "true",
              "sliders and mode buttons tell assistive tech their state")
@@ -165,16 +167,16 @@ async def main():
         c.ok("otsu" in await page.inner_text("#infoBadge"), "the ? button shows the run's parameters")
         await page.click("#btnHints")
         await page.click("#swSpecks")
-        badge = await badge_with(page, "specks kept")
-        c.ok(await page.inner_text("#valSpecks") == "Off", "Specks switch turns the despeckle off")
+        badge = await badge_with(page, "removed")
+        c.ok(await page.inner_text("#valSpecks") == "On", "Specks switch turns the despeckle on")
 
         await page.click("#btnReset")
         await page.wait_for_function(
-            "!document.getElementById('infoBadge').textContent.includes('specks kept')", timeout=120000)
-        c.ok(await page.is_checked("#swSpecks"), "Reset restores the defaults")
+            "!document.getElementById('infoBadge').textContent.includes('removed')", timeout=120000)
+        c.ok(not await page.is_checked("#swSpecks"), "Reset restores the defaults")
 
         prefs = await page.evaluate("localStorage.getItem('zigzag.prefs')")
-        c.ok('"v":2' in prefs and '"specks":true' in prefs, f"settings saved: {prefs}")
+        c.ok('"v":3' in prefs and '"specks":false' in prefs, f"settings saved: {prefs}")
         c.ok(not errors, "no page errors" + (f": {errors}" if errors else ""))
 
         print("App without WebGPU (the CPU port in its worker):")
