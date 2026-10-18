@@ -152,6 +152,9 @@
         #app.sheet-open #infoBadge { transform: translate(-50%, calc(-1 * var(--sheet-h, 0px) - 8px)); }
 
         #infoBadge:empty { display: none; }
+        /* the run's parameters show with the settings' explanations (the ? button) */
+        .badge-more { display: none; }
+        #app.details .badge-more { display: inline; }
 
         #spinner {
             position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -494,7 +497,7 @@
     let comparePos = 0.5, toggled = false;
     let allowUpsample = true;        // cleared if the browser refuses the 2x canvas
     let sheetOpen = false;
-    let lastBadge = '', badgeTimer = 0;
+    let lastBadge = [''], badgeTimer = 0;   // [summary, parameters]
 
     // ── backends ──
     /** Landing-page backend line — also refreshed when the GPU is dropped mid-session. */
@@ -546,12 +549,20 @@
         });
     }
 
+    /** Info badge: a short summary, plus the run's parameters shown on demand. */
+    function setBadge(main, more = '') {
+        const tail = document.createElement('span');
+        tail.className = 'badge-more';
+        tail.textContent = more;
+        el.infoBadge.replaceChildren(...(main ? [main] : []), ...(more ? [tail] : []));
+    }
+
     /** Transient message; the info badge returns after a couple of seconds. */
     function notify(msg) {
         if (el.landing.classList.contains('hidden')) {
-            el.infoBadge.textContent = msg;
+            setBadge(msg);
             clearTimeout(badgeTimer);
-            badgeTimer = setTimeout(() => { el.infoBadge.textContent = lastBadge; }, 2200);
+            badgeTimer = setTimeout(() => setBadge(...lastBadge), 2200);
         } else {
             el.gpuStatus.textContent = msg;
             el.gpuStatus.classList.remove('on');
@@ -579,8 +590,7 @@
             if (APP_MODES.includes(p.mode)) setMode(p.mode, false);   // a saved 'color' falls back to B&W
             if (p.specks === false) setSpecks(false);
             if (p.hints) {
-                el.sheet.classList.add('hints');
-                el.btnHints.setAttribute('aria-pressed', 'true');
+                setHints(true);
             }
             // before v2 the Window default was 30, so a stored 30 means "never
             // touched": move it to the new automatic default
@@ -802,14 +812,15 @@
         }
 
         const i = res.info;
-        const ds = origSize ? ` (from ${origSize[0]}×${origSize[1]})` : '';
+        const ds = origSize ? ` · from ${origSize[0]}×${origSize[1]}` : '';
         const up = res.width !== image.width ? ' · 2×' : '';
         const sz = i.autoSize ? `size ${i.size} (auto)` : `size ${i.size}`;
         const wt = (i.weight !== 90 ? ` · w ${i.weight}` : '') + (i.despeckle === 0 ? ' · specks kept' : '');
         const ot = i.threshold !== i.otsu ? ` · thr ${i.threshold} (otsu ${i.otsu})` : ` · otsu ${i.otsu}`;
         clearTimeout(badgeTimer);
-        lastBadge = `${image.width}×${image.height}${ds}${up} · ${sz}${wt}${ot} · ${backend} ${ms.toFixed(0)} ms`;
-        el.infoBadge.textContent = lastBadge;
+        lastBadge = [`${image.width}×${image.height}${up} · ${backend} ${ms.toFixed(0)} ms`,
+                     `${ds} · ${sz}${wt}${ot}`];
+        setBadge(...lastBadge);
 
         el.btnSave.disabled = false;
         el.btnShare.disabled = false;
@@ -1029,9 +1040,14 @@
     }
     el.btnTune.addEventListener('click', () => showSheet(!sheetOpen));
 
-    el.btnHints.addEventListener('click', () => {
-        const on = el.sheet.classList.toggle('hints');
+    /** The ? button: explanations in the sheet and the run's parameters in the badge. */
+    function setHints(on) {
+        el.sheet.classList.toggle('hints', on);
+        el.app.classList.toggle('details', on);
         el.btnHints.setAttribute('aria-pressed', String(on));
+    }
+    el.btnHints.addEventListener('click', () => {
+        setHints(!el.sheet.classList.contains('hints'));
         liftBadge();
         savePrefs();
     });
@@ -1101,8 +1117,8 @@
         el.canvasResult.width = el.canvasResult.height = 0;
         el.canvasOriginal.width = el.canvasOriginal.height = 0;
         allowUpsample = true;
-        lastBadge = '';
-        el.infoBadge.textContent = '';
+        lastBadge = [''];
+        setBadge('');
         el.btnSave.disabled = true;
         el.btnShare.disabled = true;
         el.btnRotate.disabled = true;

@@ -9,8 +9,8 @@ software WebGPU adapter (SwiftShader), and checks:
   1. WebGPU accelerator vs CPU port on the example photo, every mode, despeckle
      on and off: binary output identical, gray/color within the documented
      float32 tolerance (a handful of pixels off by one gray level).
-  2. The app itself: example photo processed, automatic window, mode switch,
-     Specks switch, Reset, settings migrated from an older version, no errors;
+  2. The app itself: example photo processed, automatic window, the badge's
+     parameters behind ?, mode switch, Specks switch, Reset, settings migrated from an older version, no errors;
      then the same photo in a browser without WebGPU (CPU port in its worker).
   3. Installed: an image shared to the app (share_target) opens; then the page
      reloads with the server stopped (offline).
@@ -105,7 +105,7 @@ SHARE_FORM = """() => {
 async def badge_with(page, text):
     await page.wait_for_function(
         f"document.getElementById('infoBadge').textContent.includes({text!r})", timeout=120000)
-    return await page.inner_text("#infoBadge")
+    return await page.evaluate("document.getElementById('infoBadge').textContent")
 
 
 async def main():
@@ -151,6 +151,7 @@ async def main():
         await page.click("#btnExample")
         badge = await badge_with(page, " ms")
         c.ok("(auto)" in badge and "gpu" in badge, f"example processed: {badge}")
+        c.ok("otsu" not in await page.inner_text("#infoBadge"), "badge shows the summary only")
 
         await page.click("[data-mode=gray]")
         await page.wait_for_function(       # gray is never upsampled: 1x once it has run
@@ -160,6 +161,9 @@ async def main():
 
         await page.click("#btnTune")
         await page.wait_for_timeout(400)
+        await page.click("#btnHints")
+        c.ok("otsu" in await page.inner_text("#infoBadge"), "the ? button shows the run's parameters")
+        await page.click("#btnHints")
         await page.click("#swSpecks")
         badge = await badge_with(page, "specks kept")
         c.ok(await page.inner_text("#valSpecks") == "Off", "Specks switch turns the despeckle off")

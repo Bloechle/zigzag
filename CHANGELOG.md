@@ -9,6 +9,7 @@ Versions are shared by the three ports (Python, Java, JavaScript), which stay bi
 - Save is the primary button (filled); Tune stays highlighted while the settings are open; actions and modes react to the mouse.
 - Wide screens (720 px and more): one toolbar row, B&W / Gray on the left and the actions, labelled beside their icons, on the right.
 - Desktop: the settings float as a card at the top right instead of a sheet over the bottom of the page; the page stays live behind it, so the comparison can be dragged while tuning. A close button joins the sheet's header (phones keep the swipe and the tap outside).
+- The info badge shows a summary (size, 2×, backend and time) on one line; the run's parameters (automatic window, Otsu threshold, downscale) appear with the settings' explanations, behind the `?` button.
 
 ## 1.3.7 — 2026-10-18
 
