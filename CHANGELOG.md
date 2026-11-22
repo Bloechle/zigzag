@@ -2,6 +2,13 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.6.0 — 2026-11-22
+
+**Default output changed in gray: its gamma is 1.5.** Reproduce 1.5 with `-g 1` (Python), `--gamma=1` (Java), `{ gamma: 1 }` (JavaScript, WebGPU). Binary and color are unchanged.
+
+- The gray output's ink comes out a shade deeper, as a scanner gives it (on `examples/01_letter.jpg`, the ink's median level 67 → 41), the paper's white kept. The option left unset (`None`, `NaN` in Java, `null` in JavaScript) takes the mode's own: `GRAY_GAMMA` (1.5) in gray, 1 in color.
+- `tools/parity.py` adds the new default (858 comparisons). `examples/*_ZZ.png` are binary: unchanged.
+
 ## 1.5.0 — 2026-11-22
 
 **Same default output as 1.4.0, bit for bit.** A gamma for the gray and color outputs.

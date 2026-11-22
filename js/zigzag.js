@@ -21,7 +21,7 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
@@ -33,8 +33,10 @@ const MAX_SIZE = 2048;
 const MODES = ['binary', 'gray', 'color'];
 /** size: null (or 'auto') = the automatic rule below; despeckle: 0 (off), or 'auto'. */
 const DEFAULTS = Object.freeze({
-    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: 0, gamma: 1,
+    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: 0, gamma: null,
 });
+/** The gray output's default gamma (null asks for it): its ink a shade deeper; color and binary keep 1. */
+const GRAY_GAMMA = 1.5;
 
 /**
  * Automatic window size: one window per 45 px of image diagonal, clamped to
@@ -86,6 +88,7 @@ function resolveOptions(opts, w, h) {
     if (!Number.isInteger(o.thresholdOffset)) {
         throw new RangeError(`invalid threshold offset: ${o.thresholdOffset} (expected an integer)`);
     }
+    if (o.gamma == null) o.gamma = o.mode === 'gray' ? GRAY_GAMMA : 1;
     if (!(typeof o.gamma === 'number' && o.gamma > 0 && o.gamma <= 10)) {
         throw new RangeError(`invalid gamma: ${o.gamma} (expected a number in (0, 10])`);
     }
@@ -334,7 +337,7 @@ class ZigZag {
      *         thresholdOffset, despeckle, gamma }  — size null/'auto' (default) =
      *         automatic; offset shifts the auto Otsu threshold; despeckle 0
      *         (default) keeps every ink speck, 'auto' uses autoDespeckle; gamma
-     *         1 (default) — above 1 the gray and color ink darker (gammaCurve)
+     *         null (default: 1.5 in gray, 1 in color) — above 1 the ink darker (gammaCurve)
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {
@@ -455,4 +458,4 @@ class ZigZag {
     }
 }
 
-export { ZigZag, MODES, DEFAULTS, VERSION, autoSize, autoDespeckle, despeckle, resolveOptions, gammaCurve, applyGamma };
+export { ZigZag, MODES, DEFAULTS, GRAY_GAMMA, VERSION, autoSize, autoDespeckle, despeckle, resolveOptions, gammaCurve, applyGamma };

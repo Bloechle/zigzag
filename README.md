@@ -37,14 +37,14 @@ ZigZag is a two-pass local mean filter. **Pass A** classifies likely background 
 
 `threshold-offset` (default 0) manually shifts the automatic Otsu threshold up or down — automatic detection is preserved, the offset just nudges the cut. Like the despeckle, it is effective in all three modes.
 
-`gamma` (default 1) is the gray and color outputs' gamma: each level `v` becomes `floor(255 × (v / 255)^gamma + 0.5)`, so above 1 the ink comes out darker while the paper's white stays white (2: a stroke of 100 becomes 39), below 1 lighter. It changes neither the threshold nor the binary output. The 256 levels are the same in every port: `tools/parity.py` compares the curve of 108 gammas in each.
+`gamma` is the gray and color outputs' gamma: each level `v` becomes `floor(255 × (v / 255)^gamma + 0.5)`, so above 1 the ink comes out darker while the paper's white stays white (2: a stroke of 100 becomes 39), below 1 lighter. By default 1.5 in gray (the ink a shade deeper, as a scanner gives it) and 1 in color. It changes neither the threshold nor the binary output. The 256 levels are the same in every port: `tools/parity.py` compares the curve of 108 gammas in each.
 
 Output modes: `binary` (thresholded, 2× upsampled by default for detail preservation), `gray` (normalized foreground; the background, at or above the Otsu threshold, is cleaned to pure white — the cutoff is thresholded at 2× and averaged back, i.e. antialiased for free), `color` (same antialiased cleanup, with the original colors re-applied to the foreground — luminance-guided, hue-preserving).
 
 The three ports share the same float64 arithmetic and produce **bit-identical outputs** across languages, using separable running box sums in O(n). The box sums run on integers (gray levels and flags in, int32 sums out), exact whatever the order of the additions. This is not a claim but a test: [`tools/parity.py`](tools/parity.py) runs all three over a matrix of images (colour, grayscale, RGBA, 16-bit, an A4-sized page, a page sown with specks of every size, and degenerate 1-pixel-wide cases), modes and parameters — automatic and fixed sizes, despeckle automatic, explicit and off, 2× and 1× binary output — and compares every pixel. It also checks that the automatic size rule returns the same integer in every port over some ten thousand image dimensions, chosen around the clamps and where the diagonal falls closest to a rounding boundary. The JS port is fed pixels already decoded by OpenCV, since in the browser the canvas does the decoding: for JS the harness proves the computation, not the decoder.
 
 ```sh
-python tools/parity.py     # 780 comparisons — any divergence is a bug
+python tools/parity.py     # 858 comparisons — any divergence is a bug
 ```
 
 It runs in CI on every change to a port ([`.github/workflows/parity.yml`](.github/workflows/parity.yml)). It has already earned its keep: it caught the Java port decoding grayscale images through a linear-gray colour space, which shifted every sample (1 → 13, 128 → 186) against the Python and JS ports.
@@ -61,7 +61,7 @@ python ports/zigzag.py -d auto noisy.jpg            # remove specks (dark, noisy
 python ports/zigzag.py -t *.jpg -o cleaned/         # batch into a directory, with timings
 ```
 
-The result is written next to each input as `<name>_ZZ.png`. Options: `-m` mode; `-s` window size or `auto`; `-w` weight; `-d` despeckle area or `auto` (default 0, every speck kept); `-T` threshold offset; `-g` gamma of the gray and color outputs (default 1); `-o` output file — or directory when batching; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, thresholds, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×; `--version`. The exit status is 0 on success, 1 when an input could not be read or written, 2 for a bad command line. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
+The result is written next to each input as `<name>_ZZ.png`. Options: `-m` mode; `-s` window size or `auto`; `-w` weight; `-d` despeckle area or `auto` (default 0, every speck kept); `-T` threshold offset; `-g` gamma of the gray and color outputs (default 1.5 in gray, 1 in color); `-o` output file — or directory when batching; `-t` separate load / process / save timings plus a batch summary; `--csv path` per-image metrics (parameters, thresholds, dimensions, timings) as CSV; `--no-upsample` to skip the binary 2×; `--version`. The exit status is 0 on success, 1 when an input could not be read or written, 2 for a bad command line. `*`, `?` and `**` (recursive) patterns are expanded even where the shell does not (Windows) — e.g. `"scans/**/*.jpg"`, whose folder tree is mirrored under the output directory. Batching is noticeably faster per image: the first image pays the warm-up (NumPy/CuPy), the rest run at full speed.
 
 ```python
 from zigzag import process
@@ -112,7 +112,7 @@ ZigZag.Result res = ZigZag.process(image, opts);
 </script>
 ```
 
-Like the Python and Java ports, `size` defaults to its automatic rule (`null` or `'auto'`) and `despeckle` to 0, with `'auto'` on request (`autoSize(w, h)` and `autoDespeckle(size)` are exported), `thresholdOffset` (default 0) shifts the auto Otsu threshold and `gamma` (default 1) darkens the gray and color outputs' ink above 1 (`gammaCurve(gamma)` is exported); `info` reports both the auto and the applied values. Invalid options throw rather than produce a degenerate image.
+Like the Python and Java ports, `size` defaults to its automatic rule (`null` or `'auto'`) and `despeckle` to 0, with `'auto'` on request (`autoSize(w, h)` and `autoDespeckle(size)` are exported), `thresholdOffset` (default 0) shifts the auto Otsu threshold and `gamma` (default `null`: 1.5 in gray, 1 in color) darkens the gray and color outputs' ink above 1 (`gammaCurve(gamma)` is exported); `info` reports both the auto and the applied values. Invalid options throw rather than produce a degenerate image.
 
 [`zigzag-gpu.js`](js/zigzag-gpu.js) is an optional WebGPU accelerator running the same pipeline as compute shaders. The foreground is cached on the GPU, so switching the output mode or the 2× upsample is near-instant; the despeckle, a connected-component pass that is sequential by nature, runs on the CPU with the CPU port's own function, and its result is cached per threshold. WebGPU uses float32 (no f64), so a handful of boundary pixels may differ from the CPU output by ±1 gray level — visually identical; [`tools/app_check.py`](tools/app_check.py) measures it on every change:
 

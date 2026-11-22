@@ -30,13 +30,16 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.5.0";
+    public static final String VERSION = "1.6.0";
     public static final int OTSU_CAP = 250;
     /** Options.size / Options.despeckle value that selects the automatic rule. */
     public static final int AUTO = -1;
     /** Largest window: keeps 255 * (size + 1)^2 inside the integer box sums
      *  (the automatic size stops at 250). */
     public static final int MAX_SIZE = 2048;
+    /** The gray output's default gamma: its ink a shade deeper; color and binary keep 1. */
+    public static final double GRAY_GAMMA = 1.5;
+
     static final java.util.List<String> MODES = java.util.List.of("binary", "gray", "color");
 
     /** Pipeline options. */
@@ -47,7 +50,7 @@ public class ZigZag {
         public boolean upsample = true;
         public int thresholdOffset = 0;    // manual shift of the auto Otsu threshold
         public int despeckle = 0;          // smallest ink component kept (px), 0 = keep all, or AUTO
-        public double gamma = 1.0;         // gray and color: the output's gamma (gammaCurve), 1 = as computed
+        public double gamma = Double.NaN;  // gray and color: the output's gamma (gammaCurve); NaN: GRAY_GAMMA in gray, 1 in color
     }
 
     /** Parameters used, auto Otsu and applied threshold. */
@@ -337,7 +340,8 @@ public class ZigZag {
         if (minArea < 0) {
             throw new IllegalArgumentException("invalid despeckle: " + opts.despeckle + " (expected >= 0, or AUTO)");
         }
-        if (!(opts.gamma > 0 && opts.gamma <= 10)) {
+        double gamma = Double.isNaN(opts.gamma) ? (opts.mode.equals("gray") ? GRAY_GAMMA : 1.0) : opts.gamma;
+        if (!(gamma > 0 && gamma <= 10)) {
             throw new IllegalArgumentException("invalid gamma: " + opts.gamma + " (expected a number in (0, 10])");
         }
         int r = size / 2;
@@ -373,8 +377,8 @@ public class ZigZag {
         info.otsu = otsuThr;
         info.threshold = thr;
         info.despeckle = minArea;
-        info.gamma = opts.gamma;
-        byte[] curve = gammaCurve(opts.gamma);
+        info.gamma = gamma;
+        byte[] curve = gammaCurve(gamma);
 
         // Despeckle: ink components smaller than the area become paper. Done on
         // the 1x foreground, before any output: a removed speck's neighbours are

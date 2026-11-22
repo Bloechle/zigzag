@@ -40,9 +40,10 @@ JAVA = os.path.join(ROOT, "ports", "ZigZag.java")
 JS = os.path.join(ROOT, "js", "zigzag.js")
 
 MODES = ["binary", "gray", "color"]
-# (size, weight, threshold offset, 2x upsample, despeckle, gamma) — ("auto", ..., 0, 1) is
-# the default output since 1.4, (30, 90, 0, True, 0, 1) the 1.0 one
-PARAMS = [("auto", 90, 0, True, 0, 1), (30, 90, 0, True, 0, 1), ("auto", 90, 0, True, "auto", 1),
+# (size, weight, threshold offset, 2x upsample, despeckle, gamma) — ("auto", 90, 0, True, 0, None)
+# is the default output since 1.6 (gamma None: the mode's own, 1.5 in gray), the same with
+# gamma 1 that of 1.4–1.5, (30, 90, 0, True, 0, 1) the 1.0 one
+PARAMS = [("auto", 90, 0, True, 0, None), ("auto", 90, 0, True, 0, 1), (30, 90, 0, True, 0, 1), ("auto", 90, 0, True, "auto", 1),
           (45, 60, -15, True, "auto", 1), (12, 100, 25, True, "auto", 1), (100, 75, 0, True, 50, 1), (30, 90, 0, False, "auto", 1),
           ("auto", 90, 0, True, 0, 2), ("auto", 90, 0, True, 0, 0.8), (30, 90, 0, True, "auto", 2.2)]
 
@@ -111,7 +112,8 @@ def corpus(d):
 def run_python(src, mode, size, weight, off, up, ds, g, d):
     dst = os.path.join(d, "py.png")
     subprocess.run([sys.executable, PY, src, "-m", mode, "-s", str(size),
-                    "-w", str(weight), "-T", str(off), "-d", str(ds), "-g", str(g), "-o", dst]
+                    "-w", str(weight), "-T", str(off), "-d", str(ds), "-o", dst]
+                   + ([] if g is None else ["-g", str(g)])
                    + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
     return read(dst)
@@ -123,8 +125,8 @@ JAVA_CP = None   # compiled once by main(); `java ZigZag.java` recompiles every 
 def run_java(src, mode, size, weight, off, up, ds, g, d):
     dst = os.path.join(d, "java.png")
     subprocess.run(["java", "-cp", JAVA_CP, "ZigZag", src, f"--mode={mode}", f"--size={size}",
-                    f"--weight={weight}", f"--threshold-offset={off}", f"--despeckle={ds}", f"--gamma={g}",
-                    f"--output={dst}"] + ([] if up else ["--no-upsample"]),
+                    f"--weight={weight}", f"--threshold-offset={off}", f"--despeckle={ds}",
+                    f"--output={dst}"] + ([] if up else ["--no-upsample"]) + ([] if g is None else [f"--gamma={g}"]),
                    check=True, capture_output=True)
     return read(dst)
 
@@ -417,7 +419,7 @@ def main():
 
 
 def other_tag(mode, size, weight, off, up, ds, g=1):
-    return f"{mode} {size}/{weight}/{off} despeckle {ds}{'' if up else ' 1x'}{'' if g == 1 else f' gamma {g}'}"
+    return f"{mode} {size}/{weight}/{off} despeckle {ds}{'' if up else ' 1x'}{'' if g == 1 else f' gamma {g or "default"}'}"
 
 
 if __name__ == "__main__":

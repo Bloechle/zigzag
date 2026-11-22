@@ -30,7 +30,7 @@ across that line is Jean-Luc's decision, never a side effect of a commit.
 5. Despeckle (off by default since 1.4): 8-connected components of `fg < thr` smaller
    than the area become 255.
 6. Output: binary (2× by default), gray or color, all three from the cleaned `fg`.
-7. Gamma (1.5, default 1: none): gray and color levels through a 256-entry table,
+7. Gamma (1.5; default since 1.6: `GRAY_GAMMA` 1.5 in gray, 1 in color): gray and color levels through a 256-entry table,
    `floor(255 × (v/255)^gamma + 0.5)` — on the 8-bit output, never on `fg`, so the
    threshold, the binary output and the 1.4 defaults are untouched (Jean-Luc's call,
    2026-11-22: a darker ink, asked for by WebForge's document scanner). A table, not a pow per
@@ -63,7 +63,7 @@ them here.
 
 ## How the ports stay identical
 
-`tools/parity.py` is the proof (13 images × 3 modes × 10 parameter sets × 2 ports = 780
+`tools/parity.py` is the proof (13 images × 3 modes × 11 parameter sets × 2 ports = 858
 comparisons, plus the size rule on ~10 000 dimensions and the gamma curve of 108 gammas;
 CI runs it on JDK 11, 21 and 25).
 What it relies on:
@@ -206,7 +206,8 @@ What it relies on:
 
 ## Where this stands (2026-11-22)
 
-Version 1.5.0 (a gamma for gray and color, the default output unchanged); before it, 1.4.0: automatic size (1.1) is the default; the despeckle (default in 1.2–1.3.8) is off since 1.4.0; 1.3 is the same
+Version 1.6.0 (gray's default gamma 1.5 — Jean-Luc's call, 2026-11-22; color and binary unchanged); 1.5.0 the gamma
+option; before it, 1.4.0: automatic size (1.1) is the default; the despeckle (default in 1.2–1.3.8) is off since 1.4.0; 1.3 is the same
 output, faster in all ports, 1.3.1 spreads the app's CPU path over the cores, and 1.3.2
 removes the incubating Vector API (Java 11+ again); 1.3.3 is an audit's fixes, 1.3.4 stateless band helpers, 1.3.5 our own examples, 1.3.6 an app without Color (Jean-Luc's call: the demo shows B&W and Gray; the ports keep color), 1.3.7 the app's audit (share target, open with, updates, accessibility), 1.3.8 the toolbar and settings layout (Save primary, one row from 720 px, settings as a floating card on desktop, the badge a one-line summary with the parameters behind `?`), 1.4.0 the despeckle off by default (it ate i-dots). Both gates in CI. Open option: band-parallel output stage (the
 serial remainder, ~134 ms binary on a 5.6 MP photo).
