@@ -2,6 +2,13 @@
 
 Versions are shared by the three ports (Python, Java, JavaScript), which stay bit-identical. A minor version may change the default output; each entry says how to reproduce the previous one.
 
+## 1.5.0 — 2026-11-22
+
+**Same default output as 1.4.0, bit for bit.** A gamma for the gray and color outputs.
+
+- New option `gamma` (default 1): each output level `v` becomes `floor(255 × (v / 255)^gamma + 0.5)` — above 1 the ink comes out darker, the paper's white stays white (2: 100 → 39); below 1 lighter. Gray and color only: the threshold and the binary output are unchanged. `-g` (Python), `--gamma=X` (Java), `{ gamma }` (JavaScript, WebGPU — applied on the host by the CPU port's table, so both give the same levels); `gammaCurve` is exported, `info.gamma` reported.
+- `tools/parity.py`: the curve of 108 gammas compared level by level in the three ports, and three parameter sets with a gamma (780 comparisons).
+
 ## 1.4.0 — 2026-10-18
 
 **Default output changed: the despeckle is off.** Reproduce 1.2–1.3.8 with `-d auto` (Python), `--despeckle=auto` (Java), `{ despeckle: 'auto' }` (JavaScript, WebGPU), or Specks On in the app.

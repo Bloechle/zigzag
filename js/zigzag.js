@@ -21,7 +21,7 @@
  *   const { data, width, height, info } = ZigZag.process(imageData, { mode: 'binary' });
  */
 
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 // Opaque white / black as one 32-bit word each, built from bytes so the
 // value is right whatever the platform's endianness.
 const WHITE = new Uint32Array(new Uint8ClampedArray([255, 255, 255, 255]).buffer)[0];
@@ -33,7 +33,7 @@ const MAX_SIZE = 2048;
 const MODES = ['binary', 'gray', 'color'];
 /** size: null (or 'auto') = the automatic rule below; despeckle: 0 (off), or 'auto'. */
 const DEFAULTS = Object.freeze({
-    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: 0,
+    mode: 'binary', size: null, weight: 90, upsample: true, thresholdOffset: 0, despeckle: 0, gamma: 1,
 });
 
 /**
@@ -56,6 +56,18 @@ function autoDespeckle(size) {
     return Math.floor((2 * size * size + 225) / 450);
 }
 
+/**
+ * The gamma curve of the gray and color outputs: level v becomes
+ * floor(255 * (v / 255)^gamma + 0.5) — 1 leaves the output as it is, above 1
+ * the ink is darker (2: 100 -> 39) and the paper's 255 stays white. A table of
+ * 256 levels, the same in every port.
+ */
+function gammaCurve(gamma) {
+    const c = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) c[v] = Math.floor(255 * Math.pow(v / 255, gamma) + 0.5);
+    return c;
+}
+
 /** Resolve and validate options; throws on values the pipeline cannot honour. */
 function resolveOptions(opts, w, h) {
     if (!(w > 0 && h > 0)) throw new RangeError(`empty image: ${w}x${h}`);
@@ -74,11 +86,22 @@ function resolveOptions(opts, w, h) {
     if (!Number.isInteger(o.thresholdOffset)) {
         throw new RangeError(`invalid threshold offset: ${o.thresholdOffset} (expected an integer)`);
     }
+    if (!(typeof o.gamma === 'number' && o.gamma > 0 && o.gamma <= 10)) {
+        throw new RangeError(`invalid gamma: ${o.gamma} (expected a number in (0, 10])`);
+    }
     if (o.despeckle === 'auto') o.despeckle = autoDespeckle(o.size);
     if (!Number.isInteger(o.despeckle) || o.despeckle < 0) {
         throw new RangeError(`invalid despeckle: ${o.despeckle} (expected an integer >= 0)`);
     }
     return { ...o, auto };
+}
+
+/** The gray or color output's RGB levels through gammaCurve(gamma), in place (1: untouched). */
+function applyGamma(rgba, gamma) {
+    if (gamma === 1) return rgba;
+    const c = gammaCurve(gamma);
+    for (let i = 0; i < rgba.length; i += 4) { rgba[i] = c[rgba[i]]; rgba[i + 1] = c[rgba[i + 1]]; rgba[i + 2] = c[rgba[i + 2]]; }
+    return rgba;
 }
 
 /** The vertical pass of the 2x upsampling for source row y: rowA holds output
@@ -308,9 +331,10 @@ class ZigZag {
     /**
      * imageData: { data: RGBA bytes, width, height }
      * opts: { mode: 'binary'|'gray'|'color', size, weight, upsample,
-     *         thresholdOffset, despeckle }  — size null/'auto' (default) =
+     *         thresholdOffset, despeckle, gamma }  — size null/'auto' (default) =
      *         automatic; offset shifts the auto Otsu threshold; despeckle 0
-     *         (default) keeps every ink speck, 'auto' uses autoDespeckle
+     *         (default) keeps every ink speck, 'auto' uses autoDespeckle; gamma
+     *         1 (default) — above 1 the gray and color ink darker (gammaCurve)
      * Returns { data: Uint8ClampedArray (RGBA), width, height, info }.
      */
     static process(imageData, opts = {}) {
@@ -382,7 +406,7 @@ class ZigZag {
         const n = w * h;
         const otsu = ZigZag.otsu(hist);
         const thr = Math.min(255, Math.max(0, otsu + o.thresholdOffset));
-        const info = { size: o.size, autoSize: o.auto, weight: o.weight, otsu, threshold: thr, despeckle: o.despeckle };
+        const info = { size: o.size, autoSize: o.auto, weight: o.weight, otsu, threshold: thr, despeckle: o.despeckle, gamma: o.gamma };
 
         // Despeckle: ink components smaller than the area become paper. Done on
         // the 1x foreground, before any output: a removed speck's neighbours are
@@ -416,7 +440,7 @@ class ZigZag {
                     out[p + 3] = 255;
                 }
             }
-            return { data: out, width: w, height: h, info };
+            return { data: applyGamma(out, o.gamma), width: w, height: h, info };
         }
 
         // binary — threshold, 2x upsample by default for detail preservation
@@ -431,4 +455,4 @@ class ZigZag {
     }
 }
 
-export { ZigZag, MODES, DEFAULTS, VERSION, autoSize, autoDespeckle, despeckle, resolveOptions };
+export { ZigZag, MODES, DEFAULTS, VERSION, autoSize, autoDespeckle, despeckle, resolveOptions, gammaCurve, applyGamma };

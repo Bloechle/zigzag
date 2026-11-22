@@ -29,7 +29,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ports"))
-from zigzag import auto_size  # noqa: E402  (the reference rule)
+from zigzag import auto_size, gamma_curve  # noqa: E402  (the reference rules)
 
 import cv2
 import numpy as np
@@ -40,10 +40,11 @@ JAVA = os.path.join(ROOT, "ports", "ZigZag.java")
 JS = os.path.join(ROOT, "js", "zigzag.js")
 
 MODES = ["binary", "gray", "color"]
-# (size, weight, threshold offset, 2x upsample, despeckle) — ("auto", ..., 0) is
-# the default output since 1.4, (30, 90, 0, True, 0) the 1.0 one
-PARAMS = [("auto", 90, 0, True, 0), (30, 90, 0, True, 0), ("auto", 90, 0, True, "auto"),
-          (45, 60, -15, True, "auto"), (12, 100, 25, True, "auto"), (100, 75, 0, True, 50), (30, 90, 0, False, "auto")]
+# (size, weight, threshold offset, 2x upsample, despeckle, gamma) — ("auto", ..., 0, 1) is
+# the default output since 1.4, (30, 90, 0, True, 0, 1) the 1.0 one
+PARAMS = [("auto", 90, 0, True, 0, 1), (30, 90, 0, True, 0, 1), ("auto", 90, 0, True, "auto", 1),
+          (45, 60, -15, True, "auto", 1), (12, 100, 25, True, "auto", 1), (100, 75, 0, True, 50, 1), (30, 90, 0, False, "auto", 1),
+          ("auto", 90, 0, True, 0, 2), ("auto", 90, 0, True, 0, 0.8), (30, 90, 0, True, "auto", 2.2)]
 
 
 # ── test corpus ──────────────────────────────────────────────────────────────
@@ -107,10 +108,10 @@ def corpus(d):
 
 # ── runners: each returns a HxW or HxWx3 uint8 array in RGB order ────────────
 
-def run_python(src, mode, size, weight, off, up, ds, d):
+def run_python(src, mode, size, weight, off, up, ds, g, d):
     dst = os.path.join(d, "py.png")
     subprocess.run([sys.executable, PY, src, "-m", mode, "-s", str(size),
-                    "-w", str(weight), "-T", str(off), "-d", str(ds), "-o", dst]
+                    "-w", str(weight), "-T", str(off), "-d", str(ds), "-g", str(g), "-o", dst]
                    + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
     return read(dst)
@@ -119,10 +120,10 @@ def run_python(src, mode, size, weight, off, up, ds, d):
 JAVA_CP = None   # compiled once by main(); `java ZigZag.java` recompiles every call
 
 
-def run_java(src, mode, size, weight, off, up, ds, d):
+def run_java(src, mode, size, weight, off, up, ds, g, d):
     dst = os.path.join(d, "java.png")
     subprocess.run(["java", "-cp", JAVA_CP, "ZigZag", src, f"--mode={mode}", f"--size={size}",
-                    f"--weight={weight}", f"--threshold-offset={off}", f"--despeckle={ds}",
+                    f"--weight={weight}", f"--threshold-offset={off}", f"--despeckle={ds}", f"--gamma={g}",
                     f"--output={dst}"] + ([] if up else ["--no-upsample"]),
                    check=True, capture_output=True)
     return read(dst)
@@ -142,7 +143,7 @@ fs.writeFileSync(process.argv[4], Buffer.concat([
 """
 
 
-def run_js(src, mode, size, weight, off, up, ds, d):
+def run_js(src, mode, size, weight, off, up, ds, g, d):
     raw = os.path.join(d, "in.rgba")
     if not os.path.exists(raw):
         bgr = cv2.imread(src, cv2.IMREAD_COLOR)
@@ -155,7 +156,7 @@ def run_js(src, mode, size, weight, off, up, ds, d):
         f.write(JS_DRIVER % JS.replace("\\", "/"))
     dst = os.path.join(d, "js.raw")
     opts = json.dumps({"mode": mode, "size": size, "weight": weight,
-                       "thresholdOffset": off, "upsample": up, "despeckle": ds})
+                       "thresholdOffset": off, "upsample": up, "despeckle": ds, "gamma": g})
     subprocess.run(["node", drv, raw, opts, dst], check=True, capture_output=True)
     blob = open(dst, "rb").read()
     w, h = np.frombuffer(blob[:8], np.int32)
@@ -194,6 +195,58 @@ public class AutoCheck {
     }
 }
 """
+
+# ── gamma curve: the same 256 levels in every port ───────────────────────────
+
+GAMMA_JS = r"""
+import { gammaCurve } from '%s';
+import fs from 'fs';
+const gs = fs.readFileSync(process.argv[2], 'utf8').trim().split('\n').map(Number);
+fs.writeFileSync(process.argv[3], gs.map((g) => Array.from(gammaCurve(g)).join(' ')).join('\n'));
+"""
+
+GAMMA_JAVA = r"""
+import java.nio.file.*;
+import java.util.stream.*;
+public class GammaCheck {
+    public static void main(String[] a) throws Exception {
+        Files.writeString(Path.of(a[1]), Files.readAllLines(Path.of(a[0])).stream().map(l -> {
+            byte[] c = ZigZag.gammaCurve(Double.parseDouble(l));
+            return IntStream.range(0, 256).mapToObj(v -> String.valueOf(c[v] & 0xFF)).collect(Collectors.joining(" "));
+        }).collect(Collectors.joining("\n")));
+    }
+}
+"""
+
+
+def gamma_values():
+    """Gammas a person would set (0.1 steps up to 10) and some odd ones."""
+    return [round(0.1 * k, 1) for k in range(1, 101)] + [0.33, 0.45, 1.8, 2.2, 2.4, 2.55, 3.14159, 7.77]
+
+
+def check_gamma(runners, d):
+    gs = gamma_values()
+    ref = [" ".join(str(int(v)) for v in gamma_curve(g)) for g in gs]
+    src = os.path.join(d, "gammas.txt")
+    with open(src, "w") as f:
+        f.write("\n".join(repr(g) for g in gs))
+    fails = 0
+    for name in runners:
+        if name == "python":
+            continue
+        dst = os.path.join(d, f"gamma_{name}.txt")
+        if name == "js":
+            drv = os.path.join(d, "gamma.mjs")
+            with open(drv, "w") as f:
+                f.write(GAMMA_JS % JS.replace("\\", "/"))
+            subprocess.run(["node", drv, src, dst], check=True, capture_output=True)
+        else:
+            subprocess.run(["java", "-cp", JAVA_CP, "GammaCheck", src, dst], check=True, capture_output=True)
+        got = open(dst).read().split("\n")
+        bad = sum(a != b for a, b in zip(ref, got)) + abs(len(ref) - len(got))
+        print(f"  {'OK  ' if not bad else 'FAIL'} gamma curve, {name}: {len(gs)} gammas x 256 levels, {bad} disagreements")
+        fails += bad > 0
+    return fails
 
 
 def auto_pairs():
@@ -312,18 +365,20 @@ def main():
     if "java" in runners:
         global JAVA_CP
         JAVA_CP = os.path.join(d, "classes")
-        drv = os.path.join(d, "AutoCheck.java")
+        drv, gdrv = os.path.join(d, "AutoCheck.java"), os.path.join(d, "GammaCheck.java")
         with open(drv, "w") as f:
             f.write(AUTO_JAVA)
-        subprocess.run(["javac", "-d", JAVA_CP, JAVA, drv], check=True,
+        with open(gdrv, "w") as f:
+            f.write(GAMMA_JAVA)
+        subprocess.run(["javac", "-d", JAVA_CP, JAVA, drv, gdrv], check=True,
                        capture_output=True)
     images = corpus(d)
     ref = "python"
     others = [k for k in runners if k != ref]
     checks = fails = 0
 
-    print(f"\nautomatic size rule vs {ref}, and the row bands:")
-    auto_fails = check_auto(runners, d)
+    print(f"\nautomatic size rule and gamma curve vs {ref}, and the row bands:")
+    auto_fails = check_auto(runners, d) + check_gamma(runners, d)
     if "js" in runners:
         auto_fails += check_bands(images, d)
 
@@ -334,11 +389,11 @@ def main():
         os.makedirs(sub, exist_ok=True)
         worst = []
         for mode in MODES:
-            for size, weight, off, up, ds in PARAMS:
-                tag = other_tag(mode, size, weight, off, up, ds)
-                a = runners[ref](src, mode, size, weight, off, up, ds, sub)
+            for size, weight, off, up, ds, g in PARAMS:
+                tag = other_tag(mode, size, weight, off, up, ds, g)
+                a = runners[ref](src, mode, size, weight, off, up, ds, g, sub)
                 for other in others:
-                    b = runners[other](src, mode, size, weight, off, up, ds, sub)
+                    b = runners[other](src, mode, size, weight, off, up, ds, g, sub)
                     checks += 1
                     if a.shape != b.shape:
                         worst.append(f"{other} {tag}: shape {a.shape} vs {b.shape}")
@@ -361,8 +416,8 @@ def main():
     return 1 if fails else 0
 
 
-def other_tag(mode, size, weight, off, up, ds):
-    return f"{mode} {size}/{weight}/{off} despeckle {ds}{'' if up else ' 1x'}"
+def other_tag(mode, size, weight, off, up, ds, g=1):
+    return f"{mode} {size}/{weight}/{off} despeckle {ds}{'' if up else ' 1x'}{'' if g == 1 else f' gamma {g}'}"
 
 
 if __name__ == "__main__":

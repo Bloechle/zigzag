@@ -45,7 +45,7 @@ except Exception:
     cp = None
     HAS_GPU = False
 
-__version__ = '1.4.0'
+__version__ = '1.5.0'
 OTSU_CAP = 250
 MODES = ('binary', 'gray', 'color')
 MAX_SIZE = 2048     # keeps 255 * (size + 1)² inside the int32 box sums of the other ports
@@ -178,14 +178,23 @@ def despeckle_mask(ink, min_area):
 
 # ── core pipeline (Algorithm 1 of the paper) ─────────────────────────────────
 
+def gamma_curve(gamma):
+    """The gamma curve of the gray and color outputs: level v becomes
+    floor(255 * (v / 255)^gamma + 0.5) — 1 leaves the output as it is, above 1
+    the ink is darker (2: 100 -> 39) and the paper's 255 stays white. A table of
+    256 levels, the same in every port."""
+    return np.array([math.floor(255.0 * math.pow(v / 255.0, gamma) + 0.5) for v in range(256)], np.uint8)
+
+
 def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=None,
-            threshold_offset=0, despeckle=0):
+            threshold_offset=0, despeckle=0, gamma=1.0):
     """
     rgb: HxWx3 uint8 (RGB). Returns (output_uint8, info_dict).
     size: window in px, or None / 'auto' (default) for auto_size(width, height)
     threshold_offset: manual shift of the auto Otsu threshold (0 = auto)
     despeckle: smallest ink component kept, in source pixels; 0 (default) keeps
       everything, None / 'auto' for auto_despeckle(size)
+    gamma: 1 (default); above 1 the gray and color ink darker (gamma_curve)
     binary → HxW (2x if upsample) · gray → HxW · color → HxWx3
     backend: None (auto) | 'gpu' (CuPy) | 'cpu' (OpenCV)
     """
@@ -211,6 +220,8 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     if int(despeckle) != despeckle or despeckle < 0:
         raise ValueError(f"invalid despeckle: {despeckle!r} (expected an integer >= 0)")
     despeckle = int(despeckle)
+    if not 0 < gamma <= 10:
+        raise ValueError(f"invalid gamma: {gamma!r} (expected a number in (0, 10])")
     if backend is None or backend == 'auto':
         backend = 'gpu' if HAS_GPU else 'cpu'
     if backend == 'gpu' and not HAS_GPU:
@@ -253,7 +264,7 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
     otsu_thr = otsu(cp.asnumpy(hist) if gpu else hist)
     thr = min(255, max(0, otsu_thr + threshold_offset))
     info = {'size': size, 'auto_size': auto, 'weight': weight, 'otsu': otsu_thr,
-            'threshold': thr, 'despeckle': despeckle, 'backend': backend}
+            'threshold': thr, 'despeckle': despeckle, 'gamma': gamma, 'backend': backend}
 
     # Despeckle: ink components smaller than the area become paper. Done on the
     # 1x foreground, before any output: a removed speck's neighbours are all
@@ -278,7 +289,8 @@ def process(rgb, mode='binary', size=None, weight=90, upsample=True, backend=Non
             ratio = fg / xp.maximum(1.0, gray)
             tc = xp.minimum(255.0, rgb.astype(xp.float64) * ratio[..., None])
             out = cov[..., None] * 255.0 + (1.0 - cov[..., None]) * tc
-        return host(xp.clip(out, 0, 255).astype(xp.uint8)), info
+        out = host(xp.clip(out, 0, 255).astype(xp.uint8))
+        return (out if gamma == 1 else gamma_curve(gamma)[out]), info
 
     # binary — threshold, 2x upsample by default for detail preservation
     if not upsample:
@@ -325,6 +337,9 @@ def main():
     parser.add_argument("-d", "--despeckle", type=_int_arg(0, auto=True), default=0,
                         help="remove ink specks smaller than N source pixels, or auto "
                              "(from the window size); default: 0, keep them all")
+    parser.add_argument("-g", "--gamma", type=float, default=1.0,
+                        help="gray and color: the output's gamma, above 1 the ink darker "
+                             "(default: 1, as computed)")
     parser.add_argument("-b", "--backend", choices=["auto", "gpu", "cpu"],
                         default="auto", help="processing backend (default: auto)")
     parser.add_argument("-o", "--output",
@@ -338,6 +353,8 @@ def main():
     parser.add_argument("--version", action="version", version=f"ZigZag {__version__}")
     args = parser.parse_args()
 
+    if not 0 < args.gamma <= 10:
+        parser.error(f"invalid gamma: {args.gamma} (expected a number in (0, 10])")
     if args.backend == "gpu" and not HAS_GPU:
         parser.error("GPU backend requested but CuPy/CUDA is not available")
 
@@ -386,7 +403,7 @@ def main():
                             weight=args.weight, upsample=not args.no_upsample,
                             backend=args.backend,
                             threshold_offset=args.threshold_offset,
-                            despeckle=args.despeckle)
+                            despeckle=args.despeckle, gamma=args.gamma)
         t_proc = (time.perf_counter() - t0) * 1000
 
         if out_dir:
@@ -420,7 +437,7 @@ def main():
                   if args.time else f"{t_proc:.0f} ms")
         size_s = f"{info['size']} (auto)" if info['auto_size'] else str(info['size'])
         print(f"{path} -> {dst}  [size={size_s} weight={info['weight']} "
-              f"despeckle={info['despeckle']} · {otsu_s}{info['backend']} · {timing}]")
+              f"despeckle={info['despeckle']}{'' if info['gamma'] == 1 else ' gamma=' + str(info['gamma'])} · {otsu_s}{info['backend']} · {timing}]")
 
     if args.csv and rows:
         with open(args.csv, "w", newline="") as f:

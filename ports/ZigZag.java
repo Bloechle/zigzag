@@ -30,7 +30,7 @@ import java.util.stream.IntStream;
 
 public class ZigZag {
 
-    public static final String VERSION = "1.4.0";
+    public static final String VERSION = "1.5.0";
     public static final int OTSU_CAP = 250;
     /** Options.size / Options.despeckle value that selects the automatic rule. */
     public static final int AUTO = -1;
@@ -47,11 +47,13 @@ public class ZigZag {
         public boolean upsample = true;
         public int thresholdOffset = 0;    // manual shift of the auto Otsu threshold
         public int despeckle = 0;          // smallest ink component kept (px), 0 = keep all, or AUTO
+        public double gamma = 1.0;         // gray and color: the output's gamma (gammaCurve), 1 = as computed
     }
 
     /** Parameters used, auto Otsu and applied threshold. */
     public static class Info {
         public int size, weight, otsu, threshold, despeckle;
+        public double gamma;
         public boolean autoSize;
     }
 
@@ -335,6 +337,9 @@ public class ZigZag {
         if (minArea < 0) {
             throw new IllegalArgumentException("invalid despeckle: " + opts.despeckle + " (expected >= 0, or AUTO)");
         }
+        if (!(opts.gamma > 0 && opts.gamma <= 10)) {
+            throw new IllegalArgumentException("invalid gamma: " + opts.gamma + " (expected a number in (0, 10])");
+        }
         int r = size / 2;
         double wf = opts.weight / 100.0;
         byte[] gray = grayImage(img);
@@ -368,6 +373,8 @@ public class ZigZag {
         info.otsu = otsuThr;
         info.threshold = thr;
         info.despeckle = minArea;
+        info.gamma = opts.gamma;
+        byte[] curve = gammaCurve(opts.gamma);
 
         // Despeckle: ink components smaller than the area become paper. Done on
         // the 1x foreground, before any output: a removed speck's neighbours are
@@ -380,8 +387,8 @@ public class ZigZag {
             double[] cov = coverage(fg, w, h, thr);
             byte[] px = new byte[n];
             IntStream.range(0, n).parallel().forEach(i ->
-                px[i] = (byte) (int) Math.min(255, Math.max(0,
-                        cov[i] * 255.0 + (1.0 - cov[i]) * fg[i])));
+                px[i] = curve[(int) Math.min(255, Math.max(0,
+                        cov[i] * 255.0 + (1.0 - cov[i]) * fg[i]))]);
             BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_BYTE_GRAY);
             out.getRaster().setDataElements(0, 0, w, h, px);
             res.image = out;
@@ -401,7 +408,7 @@ public class ZigZag {
                 for (int ch = 0; ch < 3; ch++) {
                     int shift = 16 - 8 * ch;
                     double tc = Math.min(255, ((p >> shift) & 0xFF) * ratio);
-                    v |= ((int) Math.min(255, Math.max(0, c * 255.0 + k * tc))) << shift;
+                    v |= (curve[(int) Math.min(255, Math.max(0, c * 255.0 + k * tc))] & 0xFF) << shift;
                 }
                 px[i] = v;
             });
@@ -424,6 +431,16 @@ public class ZigZag {
         out.getRaster().setDataElements(0, 0, W, H, px);
         res.image = out;
         return res;
+    }
+
+    /** The gamma curve of the gray and color outputs: level v becomes
+     *  floor(255 * (v / 255)^gamma + 0.5) - 1 leaves the output as it is, above 1
+     *  the ink is darker (2: 100 -> 39) and the paper's 255 stays white. A table
+     *  of 256 levels, the same in every port. */
+    static byte[] gammaCurve(double gamma) {
+        byte[] c = new byte[256];
+        for (int v = 0; v < 256; v++) c[v] = (byte) (int) Math.floor(255.0 * Math.pow(v / 255.0, gamma) + 0.5);
+        return c;
     }
 
     /** Turn 8-connected ink components (fg < thr) smaller than minArea into
@@ -517,7 +534,7 @@ public class ZigZag {
 
     static final String USAGE = "Usage: java ZigZag.java <inputs...> [--output=path|dir] "
             + "[--mode=binary|gray|color] [--size=N|auto] [--weight=N] [--threshold-offset=N] "
-            + "[--despeckle=N|auto] "
+            + "[--despeckle=N|auto] [--gamma=X] "
             + "[--no-upsample] [--time] [--csv=path] [--version]";
 
     /** Exit status: 0 success, 1 an input failed, 2 bad command line. */
@@ -550,6 +567,10 @@ public class ZigZag {
             else if (a.startsWith("--weight=")) { if ((v = intArg("--weight", a.substring(9), 1, Integer.MAX_VALUE)) != null) opts.weight = v; }
             else if (a.equals("--despeckle=auto")) opts.despeckle = AUTO;
             else if (a.startsWith("--despeckle=")) { if ((v = intArg("--despeckle", a.substring(12), 0, Integer.MAX_VALUE)) != null) opts.despeckle = v; }
+            else if (a.startsWith("--gamma=")) {
+                try { opts.gamma = Double.parseDouble(a.substring(8)); } catch (NumberFormatException e) { opts.gamma = Double.NaN; }
+                if (!(opts.gamma > 0 && opts.gamma <= 10)) { System.err.println("Invalid --gamma=" + a.substring(8) + " (expected a number in (0, 10])"); v = null; }
+            }
             else if (a.startsWith("--threshold-offset=")) {
                 if ((v = intArg("--threshold-offset", a.substring(19), Integer.MIN_VALUE, Integer.MAX_VALUE)) != null) opts.thresholdOffset = v;
             }

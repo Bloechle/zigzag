@@ -32,7 +32,7 @@
  *   }
  */
 
-import { ZigZag, resolveOptions, despeckle } from './zigzag.js';
+import { ZigZag, resolveOptions, despeckle, applyGamma } from './zigzag.js';
 
 /** Largest window whose box sums stay exact in float32: r = 127, (2r+1)^2 * 255 < 2^24.
  *  The automatic size tops out at 250, well inside it. */
@@ -399,7 +399,7 @@ export class ZigZagGPU {
         if (!this.#imgWidth) throw new Error('Call uploadImage() first');
         const w = this.#imgWidth, h = this.#imgHeight;
         // same defaults and validation as the CPU port (size: auto from the diagonal)
-        const { mode, size, weight, upsample, thresholdOffset: offset, despeckle: minArea, auto } =
+        const { mode, size, weight, upsample, thresholdOffset: offset, despeckle: minArea, gamma, auto } =
             resolveOptions(opts, w, h);
         if (size > GPU_MAX_SIZE) {
             throw new RangeError(`size ${size} exceeds the GPU limit (${GPU_MAX_SIZE}); use the CPU port`);
@@ -415,7 +415,7 @@ export class ZigZagGPU {
             this.#cleanKey = null;
         }
         const thr = Math.min(255, Math.max(0, this.#otsu + offset));
-        const info = { size, autoSize: auto, weight, otsu: this.#otsu, threshold: thr, despeckle: minArea };
+        const info = { size, autoSize: auto, weight, otsu: this.#otsu, threshold: thr, despeckle: minArea, gamma };
         const fg = minArea > 1 ? await this.#despeckled(thr, minArea) : B.foreground;
 
         // ─── output stage ───
@@ -454,7 +454,8 @@ export class ZigZagGPU {
         const data = new Uint8ClampedArray(B.outStaging.getMappedRange(0, readBytes).slice(0));
         B.outStaging.unmap();
 
-        return { data, width: outW, height: outH, info };
+        // the gamma on the host, by the CPU port's own table: exactly its levels
+        return { data: mode === 'binary' ? data : applyGamma(data, gamma), width: outW, height: outH, info };
     }
 
     /** The foreground with ink specks under minArea turned to paper, as a GPU

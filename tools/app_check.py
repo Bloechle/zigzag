@@ -44,15 +44,15 @@ GPU_VS_CPU = """async () => {
     await gpu.init();
     await gpu.uploadImage(img);
     const rows = [];
-    for (const mode of ['binary', 'gray', 'color']) for (const despeckle of ['auto', 0]) {
-        const a = ZigZag.process(img, { mode, despeckle });
-        const b = await gpu.process({ mode, despeckle });
+    for (const mode of ['binary', 'gray', 'color']) for (const [despeckle, gamma] of [['auto', 1], [0, 1], [0, 2]]) {
+        const a = ZigZag.process(img, { mode, despeckle, gamma });
+        const b = await gpu.process({ mode, despeckle, gamma });
         let diff = 0, dmax = 0;
         for (let i = 0; i < a.data.length; i++) {
             const d = Math.abs(a.data[i] - b.data[i]);
             if (d) { diff++; dmax = Math.max(dmax, d); }
         }
-        rows.push({ mode, despeckle, shape: a.width === b.width && a.height === b.height,
+        rows.push({ mode, despeckle, gamma, shape: a.width === b.width && a.height === b.height,
                     frac: diff / a.data.length, dmax,
                     info: JSON.stringify(a.info) === JSON.stringify(b.info) });
     }
@@ -122,8 +122,10 @@ async def main():
             c.ok(False, "WebGPU available in headless Chromium")
         for r in rows or []:
             tol = 0 if r["mode"] == "binary" else GRAY_TOLERANCE
-            c.ok(r["shape"] and r["info"] and r["frac"] <= tol and r["dmax"] <= 1,
-                 f"{r['mode']:6} despeckle {r['despeckle']}: "
+            # a level off by one on the GPU stays off by one through the gamma's table, its slope
+            # at most the gamma (2: a step of 1 near white becomes 2)
+            c.ok(r["shape"] and r["info"] and r["frac"] <= tol and r["dmax"] <= max(1, r["gamma"]),
+                 f"{r['mode']:6} despeckle {r['despeckle']}{'' if r['gamma'] == 1 else ' gamma ' + str(r['gamma'])}: "
                  f"{r['frac']:.2e} of samples differ, max delta {r['dmax']}")
         await page.close()
 
